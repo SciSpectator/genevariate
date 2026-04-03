@@ -138,127 +138,21 @@ def _qwatchdog(q, msg: str):
 #  GEOmetadb helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _decompress_gz(db_path: str, log_fn=print) -> Optional[str]:
-    """Decompress .sqlite.gz to a .sqlite file on disk. Returns path or None."""
-    tmp_path = db_path.replace(".sqlite.gz", ".sqlite.tmp.sqlite")
-    if os.path.exists(tmp_path):
-        return tmp_path
-    log_fn(f"[GEOmetadb] Decompressing {os.path.basename(db_path)}...")
-    try:
-        with gzip.open(db_path, "rb") as gz_in:
-            with open(tmp_path, "wb") as f_out:
-                shutil.copyfileobj(gz_in, f_out, length=1024 * 1024 * 16)
-        log_fn(f"[GEOmetadb] Decompressed to {os.path.basename(tmp_path)}")
-        return tmp_path
-    except Exception as exc:
-        log_fn(f"[GEOmetadb] Decompress failed: {exc}")
-        return None
-
-
-def _ensure_indexes(conn: sqlite3.Connection, log_fn=print):
-    """Create indexes on gsm/gse tables for fast lookups on disk-based DBs."""
-    indexes = [
-        ("idx_gsm_gsm", "gsm", "gsm"),
-        ("idx_gsm_series", "gsm", "series_id"),
-        ("idx_gsm_gpl", "gsm", "gpl"),
-        ("idx_gse_gse", "gse", "gse"),
-    ]
-    for idx_name, table, col in indexes:
-        try:
-            conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({col})")
-        except Exception:
-            pass
-    try:
-        conn.commit()
-    except Exception:
-        pass
-    log_fn("[GEOmetadb] Indexes verified")
-
-
 def load_db_to_memory(db_path: str, log_fn=print,
                       force_disk: bool = False) -> Optional[sqlite3.Connection]:
     """
     Load GEOmetadb.sqlite with resource-aware strategy.
 
-    On high-RAM devices (>= 10 GB free): loads entire DB into :memory: for speed.
-    On low-RAM devices: opens directly from disk with WAL mode and indexes.
+    Delegates to the shared db_loader.open_geometadb() which:
+      - Decompresses .gz once to a persistent file (streamed in 16 MB chunks)
+      - On low-RAM devices: uses disk-based SQLite with WAL + indexes
+      - On high-RAM devices: loads into :memory: for speed
+      - Falls back to disk if RAM load fails
 
-    Supports both plain .sqlite and gzipped .sqlite.gz files.
-    Returns a connection (in-memory or disk-based) or None on failure.
+    Returns a connection or None on failure.
     """
-    if not db_path:
-        log_fn("[GEOmetadb] No database path provided")
-        return None
-
-    db_path = str(db_path)
-
-    # Resolve .gz to decompressed file on disk
-    if db_path.endswith(".gz"):
-        actual_path = _decompress_gz(db_path, log_fn)
-        if actual_path is None:
-            return None
-    else:
-        actual_path = db_path
-
-    if not os.path.exists(actual_path):
-        log_fn(f"[GEOmetadb] File not found: {actual_path}")
-        return None
-
-    file_mb = os.path.getsize(actual_path) / (1024 * 1024)
-
-    # Decide: load into RAM or use disk-based access
-    try:
-        import psutil
-        free_gb = psutil.virtual_memory().available / (1024 ** 3)
-        # Need at least 2x the DB size as headroom + 2 GB for Ollama/OS
-        need_gb = (file_mb / 1024) * 2 + 2
-        use_memory = (not force_disk) and (free_gb > need_gb) and (free_gb > 6)
-    except Exception:
-        use_memory = False
-
-    if use_memory:
-        log_fn(f"[GEOmetadb] Loading {os.path.basename(actual_path)} "
-               f"({file_mb:.0f} MB) into RAM (free: {free_gb:.1f} GB)...")
-        try:
-            t0 = time.time()
-            disk_conn = sqlite3.connect(actual_path, timeout=60)
-            mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
-            disk_conn.backup(mem_conn)
-            disk_conn.close()
-            elapsed = time.time() - t0
-            log_fn(f"[GEOmetadb] Loaded into RAM in {elapsed:.1f}s")
-            conn = mem_conn
-        except (MemoryError, Exception) as exc:
-            log_fn(f"[GEOmetadb] RAM load failed ({exc}), falling back to disk mode")
-            use_memory = False
-
-    if not use_memory:
-        log_fn(f"[GEOmetadb] Opening {os.path.basename(actual_path)} "
-               f"({file_mb:.0f} MB) from disk (low-RAM mode)...")
-        try:
-            t0 = time.time()
-            conn = sqlite3.connect(actual_path, timeout=60,
-                                   check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA cache_size=-65536")   # 64 MB page cache
-            conn.execute("PRAGMA mmap_size=268435456")  # 256 MB memory-mapped I/O
-            conn.execute("PRAGMA temp_store=MEMORY")
-            _ensure_indexes(conn, log_fn)
-            elapsed = time.time() - t0
-            log_fn(f"[GEOmetadb] Disk mode ready in {elapsed:.1f}s "
-                   f"(WAL + indexes + mmap)")
-        except Exception as exc:
-            log_fn(f"[GEOmetadb] Disk load failed: {exc}")
-            return None
-
-    # Verify key tables exist
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    for required in ("gsm", "gse"):
-        if required not in tables:
-            log_fn(f"[GEOmetadb] WARNING: table '{required}' not found")
-
-    return conn
+    from genevariate.core.db_loader import open_geometadb
+    return open_geometadb(db_path, log_fn=log_fn, force_disk=force_disk)
 
 
 def fetch_gsm_raw(conn: sqlite3.Connection,

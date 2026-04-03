@@ -30,11 +30,9 @@ class ExtractionThread(threading.Thread):
     
     def run(self):
         """Main extraction logic."""
-        tmp_path = None
         try:
             from genevariate.config import CONFIG
-            import gzip
-            import tempfile
+            from genevariate.core.db_loader import open_geometadb
             import os
 
             # Check for stop signal
@@ -43,15 +41,14 @@ class ExtractionThread(threading.Thread):
                 self.on_finish()
                 return
 
-            # Create thread-local database connection
-            gz_path = CONFIG['paths']['geo_db']
-            with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
-                tmp_path = tmp.name
-                with gzip.open(gz_path, "rb") as gzfi:
-                    tmp.write(gzfi.read())
-
-            conn = sqlite3.connect(tmp_path)
-            conn.text_factory = lambda b: b.decode('utf-8', 'replace')
+            # Open database (resource-aware: disk or RAM depending on device)
+            gz_path = str(CONFIG['paths']['geo_db'])
+            conn = open_geometadb(gz_path, log_fn=self.log_func)
+            if conn is None:
+                self.log_func("[Step 1] ERROR: Could not open GEOmetadb")
+                self.final_df = pd.DataFrame()
+                self.on_finish()
+                return
 
             # Parse search tokens
             tokens = [t.strip().lower() for t in self.search_tokens.split(',') if t.strip()]
@@ -138,14 +135,6 @@ class ExtractionThread(threading.Thread):
             self.log_func(f"[Step 1 ERROR] {traceback.format_exc()}")
             self.final_df = pd.DataFrame()
             self.on_finish()
-        finally:
-            # Always clean up temp file
-            if tmp_path:
-                try:
-                    import os
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
 
 
 class LabelingThread(threading.Thread):

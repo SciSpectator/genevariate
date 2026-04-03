@@ -165,18 +165,12 @@ def setup():
         sys.exit(1)
     print(f"  GEOmetadb : {geo_path}")
 
-    print("  Loading database into memory ...")
-    if geo_path.endswith('.gz'):
-        tmp = geo_path.replace('.gz', '.tmp.sqlite')
-        if not os.path.exists(tmp):
-            with gzip.open(geo_path, 'rb') as fi, open(tmp, 'wb') as fo:
-                shutil.copyfileobj(fi, fo)
-        disk = sqlite3.connect(tmp)
-    else:
-        disk = sqlite3.connect(geo_path)
-    conn = sqlite3.connect(":memory:")
-    disk.backup(conn)
-    disk.close()
+    print("  Loading database ...")
+    from genevariate.core.db_loader import open_geometadb
+    conn = open_geometadb(geo_path)
+    if conn is None:
+        print("  ERROR: Could not open GEOmetadb")
+        sys.exit(1)
 
     data_dir   = CONFIG['paths']['data']
     mem_path   = os.path.join(data_dir, "gse_cache", "gse_cache.json")

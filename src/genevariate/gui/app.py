@@ -847,54 +847,13 @@ class ExtractionThread(threading.Thread):
                 self.final_df = pd.DataFrame()
                 return
 
-            # ── Open our own thread-local copy (resource-aware) ──
-            with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
-                tmp_path = tmp.name
-                with gzip.open(self.gz_path, "rb") as gzf:
-                    shutil.copyfileobj(gzf, tmp)
-
-            # Decide: load into RAM or use disk-based access
-            try:
-                free_gb = psutil.virtual_memory().available / (1024 ** 3)
-                file_mb = os.path.getsize(tmp_path) / (1024 * 1024)
-                need_gb = (file_mb / 1024) * 2 + 2
-                use_memory = (free_gb > need_gb) and (free_gb > 6)
-            except Exception:
-                use_memory = False
-
-            if use_memory:
-                self._log("[Step 1] Loading GEOmetadb into RAM...")
-                disk_conn = sqlite3.connect(tmp_path)
-                disk_conn.text_factory = lambda b: b.decode('utf-8', 'replace')
-                mem_conn = sqlite3.connect(":memory:")
-                mem_conn.text_factory = disk_conn.text_factory
-                disk_conn.backup(mem_conn)
-                disk_conn.close()
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-                db_conn = mem_conn
-            else:
-                self._log("[Step 1] Opening GEOmetadb from disk (low-RAM mode)...")
-                db_conn = sqlite3.connect(tmp_path, timeout=60)
-                db_conn.text_factory = lambda b: b.decode('utf-8', 'replace')
-                db_conn.execute("PRAGMA journal_mode=WAL")
-                db_conn.execute("PRAGMA cache_size=-65536")
-                db_conn.execute("PRAGMA mmap_size=268435456")
-                db_conn.execute("PRAGMA temp_store=MEMORY")
-                # Create indexes for faster searches
-                for idx, tbl, col in [
-                    ("idx_gsm_gsm", "gsm", "gsm"),
-                    ("idx_gsm_series", "gsm", "series_id"),
-                    ("idx_gse_gse", "gse", "gse"),
-                ]:
-                    try:
-                        db_conn.execute(
-                            f"CREATE INDEX IF NOT EXISTS {idx} ON {tbl}({col})")
-                    except Exception:
-                        pass
-                mem_conn = None  # track for cleanup
+            # ── Open GEOmetadb (resource-aware: disk or RAM) ──
+            from genevariate.core.db_loader import open_geometadb
+            db_conn = open_geometadb(self.gz_path, log_fn=self._log)
+            if db_conn is None:
+                self._log("[Step 1] ERROR: Could not open GEOmetadb")
+                self.final_df = pd.DataFrame()
+                return
 
             self._log("PROGRESS: 10")
             self._do_search(db_conn)
@@ -905,13 +864,11 @@ class ExtractionThread(threading.Thread):
             self._log(traceback.format_exc())
             self.final_df = pd.DataFrame()
         finally:
-            # Close whichever connection was used
-            for c in (mem_conn, db_conn if 'db_conn' in dir() else None):
-                if c is not None:
-                    try:
-                        c.close()
-                    except Exception:
-                        pass
+            try:
+                if 'db_conn' in dir() and db_conn is not None:
+                    db_conn.close()
+            except Exception:
+                pass
             if self.gui_ref:
                 self.gui_ref.after(0, self.on_finish_cb)
 
@@ -8919,29 +8876,17 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 self.enqueue_log("[WARNING] Download from: https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz")
                 return
 
-        tmp_sql_path = None
         try:
             file_size_mb = os.path.getsize(gz_path) / (1024*1024)
             self.enqueue_log(f"[DB] Loading GEOmetadb from: {gz_path} ({file_size_mb:.0f} MB)")
-            print(f"[DB] Loading GEOmetadb into memory from {gz_path}...")
             self.enqueue_log("[DB] This may take a minute on first run...")
-            
-            with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
-                tmp_sql_path = tmp.name
-                with gzip.open(gz_path, "rb") as gzfi:
-                    shutil.copyfileobj(gzfi, tmp)
 
-            disk_conn = sqlite3.connect(tmp_sql_path)
-            disk_conn.text_factory = lambda b: b.decode('utf-8', 'replace')
-
-            self.gds_conn = sqlite3.connect(":memory:")
-            self.gds_conn.text_factory = disk_conn.text_factory
-            
-            self.enqueue_log("[DB] Copying database to memory...")
-            disk_conn.backup(self.gds_conn)
-            disk_conn.close()
-            
-            os.remove(tmp_sql_path)
+            from genevariate.core.db_loader import open_geometadb
+            self.gds_conn = open_geometadb(
+                gz_path, log_fn=self.enqueue_log)
+            if self.gds_conn is None:
+                self.enqueue_log("[DB ERROR] Could not open GEOmetadb")
+                return
             
             # Verify the database has the expected tables
             tables = [r[0] for r in self.gds_conn.execute(
@@ -15146,15 +15091,13 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
                 # Step A: Load GEOmetadb once for all regions
                 _update_status("Loading GEO database...", 5)
-                gz_path = CONFIG['paths']['geo_db']
+                gz_path = str(CONFIG['paths']['geo_db'])
 
-                with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
-                    tmp_path = tmp.name
-                    with gzip.open(gz_path, "rb") as gzfi:
-                        tmp.write(gzfi.read())
-
-                thread_conn = sqlite3.connect(tmp_path)
-                thread_conn.text_factory = lambda b: b.decode('utf-8', 'replace')
+                from genevariate.core.db_loader import open_geometadb
+                thread_conn = open_geometadb(gz_path)
+                if thread_conn is None:
+                    _update_status("ERROR: Could not open GEOmetadb", 0)
+                    return
 
                 # Step B: Fetch metadata & classify each region
                 for r_idx, region in enumerate(region_specs):

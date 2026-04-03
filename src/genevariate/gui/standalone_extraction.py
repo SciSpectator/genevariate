@@ -867,19 +867,12 @@ def load_platform(gpl, data_dir, conn):
 
 
 def load_geometadb(path):
-    """Load GEOmetadb into memory."""
+    """Load GEOmetadb (resource-aware: disk or RAM depending on device)."""
     print(f"  Loading GEOmetadb: {path}")
-    if path.endswith('.gz'):
-        tmp = path.replace('.gz', '.tmp.sqlite')
-        if not os.path.exists(tmp):
-            with gzip.open(path, 'rb') as fi, open(tmp, 'wb') as fo:
-                shutil.copyfileobj(fi, fo)
-        disk = sqlite3.connect(tmp)
-    else:
-        disk = sqlite3.connect(path)
-    conn = sqlite3.connect(":memory:")
-    disk.backup(conn)
-    disk.close()
+    from genevariate.core.db_loader import open_geometadb
+    conn = open_geometadb(path)
+    if conn is None:
+        raise RuntimeError(f"Could not open GEOmetadb at {path}")
     return conn
 
 
