@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environments
+venv/
+.venv/
+env/
+# Root-level duplicate venv (named genevariate/)
+/genevariate/
+
+# Legacy data (not part of v2.0 package)
+/Labels/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ===== Data files (users download/generate separately) =====
+# GEO database (1+ GB)
+# GEOmetadb.sqlite.gz is tracked via Git LFS (required for the program)
+# Exclude only the uncompressed temp version
+**/GEOmetadb.sqlite.tmp.sqlite
+**/biomedical_memory.db
+
+# Platform data (large CSV/GZ files)
+**/*_data.csv.gz
+**/raw_matrices/
+
+# GPL annotation files (downloaded per-platform)
+src/genevariate/data/GPL*/
+
+# Generated/cached data
+src/genevariate/data/agent_memory/
+src/genevariate/data/gse_cache/
+src/genevariate/data/labels/
+src/genevariate/data/results/
+
+# Cache
+src/genevariate/cache/
+
+# Memory runtime data
+src/genevariate/memory/clusters/*.db
+src/genevariate/memory/episodic/
+src/genevariate/memory/context/
+src/genevariate/memory/embeddings/
+
+# Results output
+src/genevariate/results/
+
+# GUI evaluation results (generated)
+src/genevariate/gui/evaluation_results/
+
+# Claude Code project settings
+.claude/
+
+# Paper report (generated)
+src/paper_report/
+
+# Misc
+*.log
+*.bak
+*.tmp
+# Runtime-generated sqlite databases (not GEOmetadb)
+**/biomedical_memory.db

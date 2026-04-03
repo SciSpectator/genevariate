@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genevariate"
+version = "2.0.0"
+description = "Gene Expression Variability Analysis Platform with AI-powered metadata extraction"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.9"
+authors = [
+    {name = "GeneVariate Development Team"},
+]
+keywords = ["bioinformatics", "gene-expression", "GEO", "microarray", "AI", "LLM"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+    "GEOparse",
+    "requests",
+    "psutil",
+    "ollama",
+    "qnorm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "flake8"]
+
+[project.scripts]
+genevariate = "genevariate.main:main"
+
+[project.gui-scripts]
+genevariate-gui = "genevariate.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

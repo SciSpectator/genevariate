@@ -1,0 +1,25 @@
+# GeneVariate - Required Dependencies
+# Install: pip install -r requirements.txt
+
+# Core data science
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+scikit-learn
+
+# GEO database / bioinformatics
+GEOparse
+requests
+psutil
+
+# AI / LLM
+ollama
+
+# Quantile normalization (optional but recommended)
+qnorm
+
+# Tkinter is part of Python stdlib but may need system package:
+#   Ubuntu/Debian: sudo apt install python3-tk
+#   Fedora: sudo dnf install python3-tkinter

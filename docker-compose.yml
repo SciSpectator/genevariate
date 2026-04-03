@@ -1,0 +1,66 @@
+services:
+  # ── Ollama LLM server ──────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: genevariate-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Model puller (one-time setup) ──────────────────────────────────
+  ollama-setup:
+    image: curlimages/curl:latest
+    container_name: genevariate-model-setup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Pulling gemma2:2b..."
+        curl -s http://ollama:11434/api/pull -d '{"name":"gemma2:2b"}' > /dev/null
+        echo "Pulling gemma2:9b..."
+        curl -s http://ollama:11434/api/pull -d '{"name":"gemma2:9b"}' > /dev/null
+        echo "Pulling nomic-embed-text..."
+        curl -s http://ollama:11434/api/pull -d '{"name":"nomic-embed-text"}' > /dev/null
+        echo "All models ready."
+
+  # ── GeneVariate application ────────────────────────────────────────
+  genevariate:
+    build: .
+    container_name: genevariate-app
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      # Mount your data directory (must contain GEOmetadb.sqlite.gz)
+      - ./data:/app/src/genevariate/data
+      # Output results
+      - ./results:/app/src/genevariate/results
+      # X11 socket for GUI (Linux only)
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    network_mode: host
+    # For headless NS repair, override the command:
+    # docker compose run genevariate --ns-repair
+
+volumes:
+  ollama_models:

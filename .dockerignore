@@ -1,0 +1,47 @@
+# Virtual environments
+venv/
+.venv/
+/genevariate/
+
+# Data files (mounted as volumes instead)
+src/genevariate/data/GEOmetadb*
+src/genevariate/data/GPL*/raw_matrices/
+src/genevariate/data/*_data.csv.gz
+src/genevariate/data/biomedical_memory.db
+src/genevariate/data/agent_memory/
+src/genevariate/data/gse_cache/
+src/genevariate/data/labels/
+src/genevariate/data/results/
+
+# Cache and results
+src/genevariate/cache/
+src/genevariate/results/
+src/genevariate/gui/evaluation_results/
+
+# Memory runtime
+src/genevariate/memory/clusters/*.db
+src/genevariate/memory/episodic/
+src/genevariate/memory/context/
+src/genevariate/memory/embeddings/
+
+# Git and IDE
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+
+# Legacy
+Labels/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# OS files
+.DS_Store
+*.log
+*.tmp
