@@ -107,12 +107,14 @@ CONFIG = {
         'timeout': 300,
     },
     'ai': {
-        'model': 'gemma2:9b',
-        'extraction_model': 'gemma2:2b',
+        'model': 'gemma4:e2b',
+        'extraction_model': 'gemma4:e2b',
         'embedding_model': 'nomic-embed-text',
         'device': 'auto',  # auto-detect GPU/CPU at runtime
         'temperature': 0,
-        'max_tokens': 150,
+        'max_tokens': 60,
+        'num_ctx': 512,
+        'think': False,             # disable gemma4 reasoning chain for speed
         'timeout': 30,
         'ollama_url': os.environ.get('OLLAMA_HOST', 'http://localhost:11434'),
     },

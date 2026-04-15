@@ -10,7 +10,7 @@ Extracts labels for an entire GPL platform, then runs all 4 phases:
 
 Usage:
   python standalone_extraction.py --gpl GPL6947 --data-dir ./data
-  python standalone_extraction.py --gpl GPL570  --model gemma2:9b --workers 10
+  python standalone_extraction.py --gpl GPL570  --model gemma4:e2b --workers 10
 
 Requirements:
   - Ollama running locally (ollama serve)
@@ -228,7 +228,7 @@ _OLLAMA_MODEL = None
 
 def detect_model():
     global _OLLAMA_MODEL
-    preferred = ['gemma2:9b', 'gemma2', 'llama3:8b', 'mistral', 'phi3', 'qwen2']
+    preferred = ['gemma4:e2b', 'gemma2', 'llama3:8b', 'mistral', 'phi3', 'qwen2']
     try:
         resp = ollama.list()
         avail = [m.get('name', m.get('model', '')) for m in resp.get('models', [])]
@@ -305,7 +305,7 @@ def classify_sample(row, fields=None):
         if gse_id and gse_id.lower() not in ('nan', 'none', ''):
             if gse_id not in _GSE_WORKERS_SA:
                 ctx = _GSE_CONTEXTS.get(gse_id, GSEContext(gse_id))
-                model = _OLLAMA_MODEL or 'gemma2:9b'
+                model = _OLLAMA_MODEL or 'gemma4:e2b'
                 platform = str(row.get('gpl', '')).strip()
                 _GSE_WORKERS_SA[gse_id] = GSEWorker(
                     gse_id, ctx, mem_agent=_MEMORY_AGENT,

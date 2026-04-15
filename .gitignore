@@ -71,6 +71,14 @@ src/genevariate/gui/evaluation_results/
 # Paper report (generated)
 src/paper_report/
 
+# PyInstaller build output
+dist/
+build/
+*.spec.bak
+
+# Generated icon variants (keep icon.png as source)
+src/genevariate/assets/icon_1024.png
+
 # Misc
 *.log
 *.bak

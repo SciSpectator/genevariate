@@ -346,16 +346,29 @@ class InteractiveSubsetAnalyzerWindow(tk.Toplevel):
         
         elif plot_type == 'pie':
             colors = plt.cm.Set3(np.linspace(0, 1, len(counts)))
-            wedges, texts, autotexts = ax.pie(counts, labels=counts.index, autopct='%1.1f%%',
-                                               colors=colors, startangle=90)
+            n_cats = len(counts)
+            if n_cats > 10:
+                # Too many categories for inline labels — use legend instead
+                wedges, texts, autotexts = ax.pie(
+                    counts, labels=None, autopct='%1.1f%%',
+                    colors=colors, startangle=90, pctdistance=0.80)
+                ax.legend(wedges, [str(l)[:25] for l in counts.index],
+                          loc='center left', bbox_to_anchor=(1.0, 0.5),
+                          fontsize=max(6, 9 - n_cats // 10))
+                fig.subplots_adjust(right=0.65)
+                for autotext in autotexts:
+                    autotext.set_fontsize(max(5, 9 - n_cats // 8))
+                    autotext.set_color('black')
+            else:
+                wedges, texts, autotexts = ax.pie(
+                    counts, labels=counts.index, autopct='%1.1f%%',
+                    colors=colors, startangle=90)
+                for autotext in autotexts:
+                    autotext.set_color('white')
+                    autotext.set_fontweight('bold')
+                    autotext.set_fontsize(10)
             ax.set_title(f'Sample Distribution by {self.current_grouping_col}',
                         fontsize=14, fontweight='bold', pad=20)
-            
-            # Make percentage text bold
-            for autotext in autotexts:
-                autotext.set_color('white')
-                autotext.set_fontweight('bold')
-                autotext.set_fontsize(10)
         
         plt.tight_layout()
         
@@ -458,18 +471,23 @@ class InteractiveSubsetAnalyzerWindow(tk.Toplevel):
                     ax.scatter(X_pca[mask, 0], X_pca[mask, 1], 
                              c=[colors[i]], label=group, s=60, alpha=0.6, edgecolors='black', linewidth=0.5)
                 
-                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, shadow=True)
+                has_legend = True
             else:
                 ax.scatter(X_pca[:, 0], X_pca[:, 1], c='steelblue', s=60, alpha=0.6, edgecolors='black', linewidth=0.5)
-            
-            ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% variance)', 
+                has_legend = False
+
+            ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% variance)',
                          fontsize=12, fontweight='bold')
             ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]*100:.1f}% variance)',
                          fontsize=12, fontweight='bold')
             ax.set_title('PCA: Principal Component Analysis', fontsize=14, fontweight='bold', pad=20)
             ax.grid(True, alpha=0.3, linestyle='--')
-            
-            plt.tight_layout()
+
+            fig.tight_layout()
+            if has_legend:
+                fig.subplots_adjust(right=0.72)
+                ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8,
+                          frameon=True, shadow=True)
             
             # Embed
             canvas = FigureCanvasTkAgg(fig, master=self.pca_canvas_frame)

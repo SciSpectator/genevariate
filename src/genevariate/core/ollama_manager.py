@@ -24,11 +24,12 @@ import requests
 import psutil
 
 # Constants
-DEFAULT_MODEL = "gemma2:9b"
+DEFAULT_MODEL = "gemma4:e2b"
 DEFAULT_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 CPU_OLLAMA_URL = "http://localhost:11435"
 
 MODEL_RAM_GB = {
+    "gemma4:e2b": 7.2,
     "gemma2:2b": 2.0, "gemma2:2b-q4_0": 1.8,
     "gemma2:9b": 5.4, "gemma2:9b-q4_0": 5.0, "gemma2:9b-q8_0": 9.5,
     "gemma2:27b": 18.0,
@@ -36,7 +37,7 @@ MODEL_RAM_GB = {
     "mistral:7b": 4.8, "mistral:7b-q4_0": 4.5,
     "qwen2.5:7b": 4.4,
 }
-DEFAULT_MODEL_GB = 5.4
+DEFAULT_MODEL_GB = 7.2
 
 
 # ── GPU Detection ──
@@ -425,7 +426,7 @@ class Watchdog:
         # Dynamic concurrency adjustment (set by pipeline)
         self._adjust_concurrency = None  # callable(new_n) or None
         self._target_parallel = 0
-        self._model = "gemma2:9b"
+        self._model = "gemma4:e2b"
         self._inhibit_fd = None
 
     def start(self):

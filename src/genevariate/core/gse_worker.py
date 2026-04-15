@@ -1,16 +1,22 @@
 """
 GSEWorker - Autonomous agent that processes NS samples for one GSE experiment.
 
-Architecture:
-    Phase 1:   Raw LLM extraction (combined Tissue + Condition + Treatment)
-    Phase 1.5: Per-field ReAct collapse agent with 3 tools:
-                 SEARCH  - semantic search for cluster candidates
-                 PICK    - validate and return a cluster name
-                 NEW_CLUSTER - register a novel entity as a new cluster
-    Phase 2:   GSE context rescue (dominant sibling labels for remaining NS)
+Architecture (Phase 2 OFF — LLM-only, no biomedical database):
+    Phase 1a:  Per-label raw LLM extraction (3 parallel agents, gemma4:e2b)
+    Phase 1b:  Per-label NS inference with GSE context as KV-cached system prompt
+    Phase 1c:  Full-metadata re-extraction for remaining NS (system/user split,
+               NO char limits on Description/Summary, domain-expert system prompts)
+    Phase 1.5: Deterministic collapse (exact match + abbreviation against siblings)
+               + single-shot LLM collapse against GSE sibling labels
+    GSE Rescue: Dominant sibling label consensus for remaining NS fields
 
-    Treatment: raw labels kept as-is (no cluster vocabulary).
-    Episodic memory written after every validated collapse.
+Architecture (Phase 2 ON — full pipeline with biomedical_memory.db):
+    All of the above, plus:
+    Phase 2:   Cluster map O(1) lookup, episodic fast-path, ReAct collapse agent
+               (SEARCH/PICK/NEW_CLUSTER tools), cluster gate, episodic memory writes
+
+Phase toggles (enable_phase15, enable_phase2) allow independent control.
+Treatment labels use sibling snap (word overlap) — no cluster vocabulary.
 
 Thread-local HTTP sessions for safe parallel usage.
 Supports both the `ollama` library and HTTP fallback.
@@ -32,8 +38,14 @@ from genevariate.core.extraction import (
     LABEL_COLS_SCRATCH,
     EXTRACTION_MODEL,
     EXTRACTION_PROMPT_TEMPLATE,
+    PER_LABEL_EXTRACT_PROMPTS,
+    PER_LABEL_INFER_SYSTEMS,
+    PER_LABEL_COLLAPSE_PROMPTS,
+    PER_LABEL_SYSTEM_PROMPTS,
+    EXTRACT_USER_TEMPLATE,
     parse_json_extraction,
     parse_combined,
+    parse_single_label,
     format_raw_block,
     format_sample_for_extraction,
     prompt_extract_combined,
@@ -102,22 +114,27 @@ def _pick_ollama_url(
 
 class GSEWorker:
     """
-    Processes NS samples for one GSE experiment using a ReAct collapse agent.
+    Processes NS samples for one GSE experiment.
 
     Lifecycle:
-        1. Instantiate with GSE id, GSEContext, model config, and MemoryAgent.
+        1. Instantiate with GSE id, GSEContext, model config.
+           Optionally pass MemoryAgent + enable_phase2=True for full pipeline.
         2. Call ``repair_one(gsm, raw_dict)`` for each NS sample.
         3. Or call ``process_all(samples)`` for batch processing.
 
-    The collapse agent has three tools:
-        SEARCH       - semantic search against cluster vocabulary
-        PICK         - select a known cluster label
-        NEW_CLUSTER  - register a new cluster for a unique biomedical entity
+    When enable_phase2=False (LLM-only mode):
+        Uses per-label extraction + GSE context inference + deterministic
+        collapse + single-shot LLM collapse against sibling labels.
+        No biomedical database required.
+
+    When enable_phase2=True (full pipeline):
+        Additionally uses cluster map, episodic memory, ReAct collapse
+        agent (SEARCH/PICK/NEW_CLUSTER tools), and cluster gate.
     """
 
     # Class-level constants
     MAX_REACT_TURNS = 3
-    EXTRACT_MODEL = EXTRACTION_MODEL          # gemma2:2b for fast extraction
+    EXTRACT_MODEL = EXTRACTION_MODEL          # gemma4:e2b for extraction
     COLLAPSE_MAX_CANDIDATES = 8
     DOMINANT_THRESHOLD = 0.50                  # GSE rescue threshold
 
@@ -125,11 +142,13 @@ class GSEWorker:
         self,
         gse_id: str,
         ctx,                                   # GSEContext
-        model: str = "gemma2:9b",
+        model: str = "gemma4:e2b",
         ollama_url: str = DEFAULT_OLLAMA_URL,
         watchdog=None,                         # Watchdog instance (optional)
         mem_agent=None,                        # MemoryAgent instance
         platform: str = "",
+        enable_phase15: bool = True,           # Phase 1.5: deterministic collapse
+        enable_phase2: bool = True,            # Phase 2: biomedical DB collapse
     ):
         self.gse_id = gse_id
         self.ctx = ctx
@@ -138,6 +157,8 @@ class GSEWorker:
         self.watchdog = watchdog
         self.mem_agent = mem_agent
         self.platform = platform
+        self.enable_phase15 = enable_phase15
+        self.enable_phase2 = enable_phase2
 
         # Pre-build GSE description block for prompt injection
         lines: List[str] = []
@@ -166,14 +187,18 @@ class GSEWorker:
         return self._llm_with_model(self.model, prompt, max_tokens)
 
     def _llm_with_model(
-        self, model: str, prompt: str, max_tokens: int = 200
+        self, model: str, prompt: str, max_tokens: int = 60,
+        system: str = "", num_ctx: int = 512,
     ) -> str:
         """
-        Single-turn LLM generation.
+        Single-turn LLM generation with think=false for gemma4:e2b speed.
 
-        Tries the ``ollama`` Python library first (keeps connection alive,
-        handles streaming internally). Falls back to raw HTTP POST if the
-        library is unavailable.
+        Uses HTTP API directly with think=False to disable gemma4's internal
+        reasoning chain (~50x speedup, no accuracy loss). Falls back gracefully
+        for models that don't support the think param.
+
+        num_ctx: context window size. Phase 1a/1b use 512 (fast, truncated).
+                 Phase 1c uses 4096 (full metadata, no truncation).
         """
         if self.watchdog:
             self.watchdog.wait_if_paused()
@@ -181,41 +206,28 @@ class GSEWorker:
 
         url = _pick_ollama_url(self.ollama_url)
 
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
         for attempt in range(1, 4):
             try:
-                # -- ollama library path --
-                # Use HTTP when routed to CPU Ollama (library connects to default)
-                if _OLLAMA_LIB_OK and url == self.ollama_url:
-                    resp = _ollama_lib.chat(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        options={
-                            "temperature": 0.0,
-                            "num_predict": max_tokens,
-                        },
-                        keep_alive=-1,
-                    )
-                    # ollama >=0.2 returns an object; older returns dict
-                    if hasattr(resp, "message") and hasattr(resp.message, "content"):
-                        return (resp.message.content or "").strip()
-                    if isinstance(resp, dict):
-                        return resp.get("message", {}).get("content", "").strip()
-                    return ""
-
-                # -- HTTP path (required for CPU Ollama on port 11435) --
                 sess = _get_session()
                 payload = {
                     "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
+                    "think": False,
                     "keep_alive": -1,
                     "options": {
                         "temperature": 0.0,
                         "num_predict": max_tokens,
+                        "num_ctx": num_ctx,
                     },
                 }
                 r = sess.post(
-                    f"{url}/api/chat", json=payload, timeout=120,
+                    f"{url}/api/chat", json=payload, timeout=30,
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -233,16 +245,16 @@ class GSEWorker:
                 elif "connection refused" in err or "disconnected" in err:
                     time.sleep(5 * attempt)
                 else:
-                    time.sleep(3 * attempt)
+                    time.sleep(2 * attempt)
                 if attempt == 3:
                     return ""
         return ""
 
     def _llm_chat(
-        self, messages: List[dict], max_tokens: int = 200
+        self, messages: List[dict], max_tokens: int = 60
     ) -> str:
         """
-        Multi-turn chat LLM call (used by the ReAct collapse agent).
+        Multi-turn chat LLM call with think=false (used by the ReAct collapse agent).
 
         Same retry / OOM logic as ``_llm_with_model``.
         """
@@ -254,38 +266,20 @@ class GSEWorker:
 
         for attempt in range(1, 4):
             try:
-                # Use ollama library only when on default GPU URL
-                if _OLLAMA_LIB_OK and url == self.ollama_url:
-                    resp = _ollama_lib.chat(
-                        model=self.model,
-                        messages=messages,
-                        options={
-                            "temperature": 0.0,
-                            "num_predict": max_tokens,
-                            "num_ctx": 4096,
-                        },
-                        keep_alive=-1,
-                    )
-                    if hasattr(resp, "message") and hasattr(resp.message, "content"):
-                        return (resp.message.content or "").strip()
-                    if isinstance(resp, dict):
-                        return resp.get("message", {}).get("content", "").strip()
-                    return ""
-
-                # HTTP path (required for CPU Ollama on port 11435)
                 sess = _get_session()
                 payload = {
                     "model": self.model,
                     "messages": messages,
                     "stream": False,
+                    "think": False,
                     "keep_alive": -1,
                     "options": {
                         "temperature": 0.0,
                         "num_predict": max_tokens,
-                        "num_ctx": 4096,
+                        "num_ctx": 512,
                     },
                 }
-                r = sess.post(f"{url}/api/chat", json=payload, timeout=120)
+                r = sess.post(f"{url}/api/chat", json=payload, timeout=30)
                 r.raise_for_status()
                 data = r.json()
                 return data.get("message", {}).get("content", "").strip()
@@ -300,7 +294,7 @@ class GSEWorker:
                     else:
                         time.sleep(8)
                 else:
-                    time.sleep(3 * attempt)
+                    time.sleep(2 * attempt)
                 if attempt == 3:
                     return ""
         return ""
@@ -553,6 +547,40 @@ class GSEWorker:
         return label, False
 
     # ------------------------------------------------------------------
+    # Sibling snap helper (word-overlap matching)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sibling_snap(
+        label: str, ctx_counts: dict, current_rule: str
+    ) -> Tuple[str, str]:
+        """
+        Snap a label to the closest sibling via word overlap.
+
+        Used for columns without cluster vocabulary (e.g. Treatment)
+        and as a fallback when Phase 2 is disabled.
+        Returns (final_label, collapse_rule).
+        """
+        norm_label = label.lower().strip()
+        best = None
+        best_count = 0
+        for sib, cnt in ctx_counts.items():
+            if is_ns(sib):
+                continue
+            norm_sib = sib.lower().strip()
+            overlap = sum(
+                1 for w in norm_label.split() if w in norm_sib.split())
+            total_words = max(1, len(norm_label.split()))
+            if (norm_sib in norm_label or norm_label in norm_sib
+                    or (overlap / total_words) >= 0.6):
+                if cnt > best_count:
+                    best = sib
+                    best_count = cnt
+        if best and best != label:
+            return best, "sibling_snap"
+        return label, current_rule
+
+    # ------------------------------------------------------------------
     # repair_one: the per-sample repair pipeline
     # ------------------------------------------------------------------
 
@@ -565,19 +593,21 @@ class GSEWorker:
         """
         Full repair pipeline for one sample.
 
-        Architecture aligned with geo_ns_repair_v2.py:
-            1a. Combined raw extraction using EXTRACTION_PROMPT_TEMPLATE (gemma2:2b)
-            1b. Fallback with full GSE context for any remaining NS fields
-            2.  Per-field resolution (parallel threads):
-                - Capitalisation normalisation (cluster_lookup on raw)
-                - GSE rescue FIRST (dominant sibling for NS fields)
-                - Fast-path cluster_map lookup
-                - GSE dominant (>70%) fast-path
-                - Phase 1.5 deterministic collapse
-                - ReAct collapse agent
+        Architecture (per-label agent pipeline, gemma4:e2b):
+            1a. Per-label raw extraction with independent agents (think=false)
+            1b. Per-label NS inference with GSE context as KV-cached system prompt
+            1c. Full-metadata re-extraction for remaining NS (system/user split,
+                NO truncation, domain-expert system prompts KV-cached)
+            Per-field resolution (parallel threads):
+              - GSE rescue (dominant sibling for NS fields)
+              - Phase 1.5 deterministic collapse (exact match + abbreviation)
+              When enable_phase2=True (biomedical DB):
+                - Cluster map O(1), episodic fast-path, ReAct collapse agent
                 - Cluster gate with new-cluster registration
-                - Treatment sibling snap (no cluster vocab)
                 - Episodic memory write
+              When enable_phase2=False (LLM-only):
+                - Single-shot LLM collapse against sibling labels
+                - Sibling snap (word overlap normalisation)
 
         Args:
             gsm: GSM sample identifier
@@ -593,212 +623,356 @@ class GSEWorker:
         result: Dict[str, str] = {col: NS for col in LABEL_COLS_SCRATCH}
         ma = self.mem_agent
 
-        # ── Step 1a: Combined raw extraction with fast model ──
+        # ── Step 1a: Per-label raw extraction with independent agents (gemma4:e2b) ──
 
         title_str = str(raw.get("gsm_title", raw.get("title", "")))[:80]
         source_str = str(raw.get("source_name", raw.get("source_name_ch1", "")))[:60]
         chars_str = str(raw.get("characteristics", raw.get("characteristics_ch1", "")))[:250]
 
-        # Use .replace() instead of .format() — template has literal JSON braces
-        extraction_prompt = (EXTRACTION_PROMPT_TEMPLATE
-            .replace("{TITLE}", title_str)
-            .replace("{SOURCE}", source_str)
-            .replace("{CHAR}", chars_str))
+        def _extract_one_label(col: str) -> Tuple[str, str]:
+            """Extract a single label using its dedicated prompt."""
+            prompt_tpl = PER_LABEL_EXTRACT_PROMPTS.get(col)
+            if not prompt_tpl:
+                return col, NS
+            prompt = (prompt_tpl
+                .replace("{TITLE}", title_str)
+                .replace("{SOURCE}", source_str)
+                .replace("{CHAR}", chars_str))
+            for _attempt in range(3):
+                text = self._llm_with_model(self.EXTRACT_MODEL, prompt, max_tokens=60)
+                if text:
+                    # Clean the response — strip prefixes, quotes, etc.
+                    text = re.sub(r'^(tissue|condition|treatment)\s*:\s*', '', text,
+                                  flags=re.IGNORECASE).strip().strip('"').strip("'")
+                    if text and not is_ns(text):
+                        return col, text
+                    break
+                time.sleep(2 * (_attempt + 1))
+            return col, NS
 
-        # Append GSE context to extraction prompt (v2 approach)
-        treat_str = str(raw.get("treatment_protocol", "")).strip()[:200]
-        desc_str = str(raw.get("description", "")).strip()[:200]
-        if treat_str:
-            extraction_prompt += f"\nTreatment protocol: {treat_str}"
-        if desc_str:
-            extraction_prompt += f"\nDescription: {desc_str}"
-        if self._gse_block:
-            extraction_prompt += f"\n{self._gse_block[:400]}"
+        # Run all 3 label extractions in parallel
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(_extract_one_label, col): col
+                       for col in LABEL_COLS_SCRATCH}
+            for fut in as_completed(futures):
+                try:
+                    col, val = fut.result()
+                    if not is_ns(val):
+                        result[col] = val
+                except Exception:
+                    pass
 
-        raw_text = ""
-        for _attempt in range(3):
-            raw_text = self._llm_with_model(self.EXTRACT_MODEL, extraction_prompt, max_tokens=200)
-            if raw_text:
-                break
-            time.sleep(5 * (_attempt + 1))
-
-        if raw_text:
-            parsed = parse_json_extraction(raw_text, LABEL_COLS_SCRATCH)
-            for col in LABEL_COLS_SCRATCH:
-                if not is_ns(parsed.get(col, NS)):
-                    result[col] = parsed[col]
-
-        # ── Step 1b: Fallback with GSE context for still-NS fields ──
+        # ── Step 1b: Per-label NS inference with GSE context (KV-cached system prompt) ──
 
         still_ns = [c for c in ns_cols if is_ns(result.get(c, NS))]
         if still_ns and self._gse_block:
-            fallback_prompt = prompt_extract_combined(
-                gsm, raw, self.ctx, still_ns, gse_block=self._gse_block,
-            )
-            fb_text = ""
-            for _attempt in range(3):
-                fb_text = self._llm(fallback_prompt, max_tokens=150)
-                if fb_text:
-                    break
-                time.sleep(5 * (_attempt + 1))
-            if fb_text:
-                fb_parsed = parse_combined(fb_text, still_ns)
-                for col in still_ns:
-                    if not is_ns(fb_parsed.get(col, NS)):
-                        result[col] = fb_parsed[col]
+            gse_title = self.ctx.title or ""
+            gse_summary = (getattr(self.ctx, "summary", "") or "")[:500]
+            gse_design = (getattr(self.ctx, "design", "") or "")[:300]
 
-        # ── Per-field resolution (v2 architecture) ──
+            def _infer_one_label(col: str) -> Tuple[str, str]:
+                """Infer a single NS label using GSE context as system prompt."""
+                sys_tpl = PER_LABEL_INFER_SYSTEMS.get(col, "")
+                if not sys_tpl:
+                    return col, NS
+                system = (sys_tpl
+                    .replace("{GSE_TITLE}", gse_title)
+                    .replace("{GSE_SUMMARY}", gse_summary)
+                    .replace("{GSE_DESIGN}", gse_design))
+                prompt = (f"Title: {title_str}\n"
+                          f"Source: {source_str}\n"
+                          f"Characteristics: {chars_str}")
+                text = self._llm_with_model(
+                    self.EXTRACT_MODEL, prompt, max_tokens=60, system=system)
+                if text:
+                    text = re.sub(r'^(tissue|condition|treatment)\s*:\s*', '', text,
+                                  flags=re.IGNORECASE).strip().strip('"').strip("'")
+                    if text and not is_ns(text):
+                        return col, text
+                return col, NS
+
+            with ThreadPoolExecutor(max_workers=len(still_ns)) as pool:
+                futures = {pool.submit(_infer_one_label, col): col
+                           for col in still_ns}
+                for fut in as_completed(futures):
+                    try:
+                        col, val = fut.result()
+                        if not is_ns(val):
+                            result[col] = val
+                    except Exception:
+                        pass
+
+        # ── Step 1c: Full-metadata re-extraction for remaining NS fields ──
+        # Samples still NS after Phase 1a+1b get re-processed with:
+        #   - System prompt: domain expertise (KV-cached by Ollama for speed)
+        #   - User prompt: full metadata with NO character truncation
+        #   - GSE experiment context injected into user message
+        # This catches labels missed by the truncated Phase 1a prompts.
+
+        still_ns_1c = [c for c in ns_cols if is_ns(result.get(c, NS))]
+        if still_ns_1c:
+            # Build full metadata — ZERO truncation on every field
+            _full_title = str(raw.get("gsm_title",
+                              raw.get("title", ""))).strip()
+            _full_source = str(raw.get("source_name",
+                               raw.get("source_name_ch1", ""))).strip()
+            _full_char = str(raw.get("characteristics",
+                             raw.get("characteristics_ch1", ""))).replace(
+                             "\t", " ").strip()
+            _full_desc = str(raw.get("description", "")).replace(
+                         "\t", " ").strip()
+            _full_treat_proto = str(raw.get("treatment_protocol",
+                                    raw.get("treatment_protocol_ch1",
+                                            ""))).replace("\t", " ").strip()
+
+            # GSE context — NO truncation
+            _gse_ctx = ""
+            if self.ctx.title:
+                _gse_ctx += f"Experiment: {self.ctx.title}\n"
+            if getattr(self.ctx, "summary", ""):
+                _gse_ctx += f"Summary: {self.ctx.summary}\n"
+            if getattr(self.ctx, "design", ""):
+                _gse_ctx += f"Design: {self.ctx.design}\n"
+
+            def _p1c_extract(col: str) -> Tuple[str, str]:
+                """Phase 1c: full-metadata extraction, NO char limits, num_ctx=4096."""
+                sys_prompt = PER_LABEL_SYSTEM_PROMPTS.get(col, "")
+                if not sys_prompt:
+                    return col, NS
+                # User message — every field, NO truncation
+                user = (EXTRACT_USER_TEMPLATE
+                        .replace("{TITLE}", _full_title)
+                        .replace("{SOURCE}", _full_source)
+                        .replace("{CHAR}", _full_char))
+                if _full_desc:
+                    user += f"\nDescription: {_full_desc}"
+                if _full_treat_proto and _full_treat_proto.lower() not in (
+                        "none", "n/a", ""):
+                    user += f"\nTreatment Protocol: {_full_treat_proto}"
+                if _gse_ctx:
+                    user += f"\n{_gse_ctx}"
+
+                for _attempt in range(3):
+                    text = self._llm_with_model(
+                        self.EXTRACT_MODEL, user,
+                        max_tokens=60, system=sys_prompt,
+                        num_ctx=4096)
+                    if text:
+                        answer = parse_single_label(text)
+                        if answer and not is_ns(answer):
+                            return col, answer
+                        break
+                    time.sleep(2)
+                return col, NS
+
+            with ThreadPoolExecutor(max_workers=len(still_ns_1c)) as pool:
+                futures = {pool.submit(_p1c_extract, col): col
+                           for col in still_ns_1c}
+                for fut in as_completed(futures):
+                    try:
+                        col, val = fut.result()
+                        if not is_ns(val):
+                            result[col] = val
+                    except Exception:
+                        pass
+
+        # ── Per-field resolution ──
+        # Two modes:
+        #   Phase 2 ON:  full pipeline (cluster map, episodic, ReAct, cluster gate)
+        #   Phase 2 OFF: LLM-only (GSE rescue, deterministic, LLM sibling collapse)
 
         def _run_field(col: str) -> Tuple[str, str, str]:
-            """Resolve one field — full v2 pipeline. Returns (col, final, rule)."""
+            """Resolve one field. Returns (col, final_label, collapse_rule)."""
             out1 = result.get(col, NS)
-
-            # --- GSE rescue FIRST (v2: moved before collapse agent) ---
-            # If extraction returned NS but GSE has dominant sibling, use it
             ctx_labels = list(self.ctx.label_counts.get(col, Counter()).keys())
             ctx_counts = dict(self.ctx.label_counts.get(col, Counter()))
 
+            # --- GSE rescue for NS labels ---
             if (is_ns(out1) or not out1) and ctx_labels:
-                _dom = max(ctx_counts, key=ctx_counts.get)
-                _dom_n = ctx_counts[_dom]
-                _total_ctx = sum(ctx_counts.values())
-                _dom_pct = _dom_n / _total_ctx if _total_ctx else 0
-                if _dom_pct >= 0.5 and ma and ma.is_cluster_name(col, _dom):
-                    out1 = _dom
-                    self._log(f"  [GSE RESCUE] {gsm} {col}: NS rescued "
-                              f"from dominant sibling {_dom!r} ({_dom_pct:.0%})")
-                elif _dom_pct >= 0.3 and ma:
-                    _cand = ma.cluster_lookup(col, _dom)
-                    if _cand and ma.is_cluster_name(col, _cand):
-                        out1 = _cand
-                        self._log(f"  [GSE RESCUE] {gsm} {col}: NS rescued "
-                                  f"from sibling {_cand!r} ({_dom_pct:.0%})")
+                non_ns = {k: v for k, v in ctx_counts.items() if not is_ns(k)}
+                if non_ns:
+                    _dom = max(non_ns, key=non_ns.get)
+                    _dom_n = non_ns[_dom]
+                    _total_ctx = sum(non_ns.values())
+                    _dom_pct = _dom_n / _total_ctx if _total_ctx else 0
 
-            # Hard skip if truly no evidence anywhere
-            if (is_ns(out1) or not out1) and not ctx_labels and not ma:
+                    if self.enable_phase2 and ma:
+                        # Full rescue: validate against cluster vocabulary
+                        if _dom_pct >= 0.5 and ma.is_cluster_name(col, _dom):
+                            out1 = _dom
+                            self._log(f"  [GSE RESCUE] {gsm} {col}: "
+                                      f"{_dom!r} ({_dom_pct:.0%})")
+                        elif _dom_pct >= 0.3:
+                            _cand = ma.cluster_lookup(col, _dom)
+                            if _cand and ma.is_cluster_name(col, _cand):
+                                out1 = _cand
+                                self._log(f"  [GSE RESCUE] {gsm} {col}: "
+                                          f"{_cand!r} ({_dom_pct:.0%})")
+                    else:
+                        # Lite rescue: no cluster validation needed
+                        if _dom_pct >= 0.50:
+                            out1 = _dom
+                            self._log(f"  [GSE RESCUE] {gsm} {col}: "
+                                      f"{_dom!r} ({_dom_pct:.0%})")
+
+            # Hard skip if truly no evidence
+            if (is_ns(out1) or not out1) and not ctx_labels:
                 return col, NS, ""
 
             final = out1
             collapsed = False
             collapse_rule = ""
 
-            # --- Fast-path: cluster_map O(1) ---
-            if ma and not is_ns(out1):
-                direct = ma.cluster_lookup(col, out1)
-                if direct and ma.is_cluster_name(col, direct):
-                    final = direct
-                    collapsed = True
-                    collapse_rule = "direct_cluster_map"
-
-            # --- Fast-path: GSE dominant >70% ---
-            if ma and not collapsed and ctx_counts:
-                top_label, top_count = max(ctx_counts.items(), key=lambda x: x[1])
-                total_ctx = sum(ctx_counts.values())
-                if total_ctx > 0 and top_count / total_ctx >= 0.70:
-                    if ma.is_cluster_name(col, top_label):
-                        final = top_label
+            # ── Phase 2 ON: full biomedical DB pipeline ──
+            if self.enable_phase2 and ma:
+                # Fast-path: cluster_map O(1)
+                if not is_ns(out1):
+                    direct = ma.cluster_lookup(col, out1)
+                    if direct and ma.is_cluster_name(col, direct):
+                        final = direct
                         collapsed = True
-                        collapse_rule = "gse_dominant"
+                        collapse_rule = "direct_cluster_map"
 
-            # --- Episodic fast-path ---
-            if not collapsed and ma is not None:
-                ep_hits = ma.episodic_search(col, out1 if not is_ns(out1) else "")
-                if ep_hits and ep_hits[0]["count"] >= 2 and ep_hits[0]["confidence"] >= 0.80:
-                    final = ep_hits[0]["canonical"]
-                    collapsed = True
-                    collapse_rule = "episodic"
+                # Fast-path: GSE dominant >70%
+                if not collapsed and ctx_counts:
+                    top_label, top_count = max(
+                        ctx_counts.items(), key=lambda x: x[1])
+                    total_ctx = sum(ctx_counts.values())
+                    if total_ctx > 0 and top_count / total_ctx >= 0.70:
+                        if ma.is_cluster_name(col, top_label):
+                            final = top_label
+                            collapsed = True
+                            collapse_rule = "gse_dominant"
 
-            # --- ReAct collapse agent ---
-            if not collapsed and ma is not None and ma.is_ready(col):
-                agent_result, agent_ok, agent_rule = self._run_collapse_agent(
-                    gsm, col, out1, gsm_row=raw,
-                )
-                if agent_ok and not is_ns(agent_result):
-                    final = agent_result
-                    collapsed = True
-                    collapse_rule = agent_rule
+                # Episodic fast-path
+                if not collapsed:
+                    ep_hits = ma.episodic_search(
+                        col, out1 if not is_ns(out1) else "")
+                    if (ep_hits and ep_hits[0]["count"] >= 2
+                            and ep_hits[0]["confidence"] >= 0.80):
+                        final = ep_hits[0]["canonical"]
+                        collapsed = True
+                        collapse_rule = "episodic"
 
-            # --- Phase 1.5 deterministic fallback ---
-            if not collapsed and ctx_labels:
+                # ReAct collapse agent
+                if not collapsed and ma.is_ready(col):
+                    agent_result, agent_ok, agent_rule = (
+                        self._run_collapse_agent(gsm, col, out1, gsm_row=raw))
+                    if agent_ok and not is_ns(agent_result):
+                        final = agent_result
+                        collapsed = True
+                        collapse_rule = agent_rule
+
+            # ── Phase 1.5: deterministic collapse against siblings ──
+            if self.enable_phase15 and not collapsed and ctx_labels:
                 matched, det_rule = phase15_collapse(out1, ctx_labels)
                 if matched and matched != out1:
-                    if ma and not ma.is_cluster_name(col, matched):
-                        remapped = ma.cluster_lookup(col, matched)
-                        matched = remapped if (remapped and
-                                  ma.is_cluster_name(col, remapped)) else None
+                    if self.enable_phase2 and ma:
+                        # Validate against cluster vocabulary
+                        if not ma.is_cluster_name(col, matched):
+                            remapped = ma.cluster_lookup(col, matched)
+                            matched = (remapped
+                                       if (remapped and
+                                           ma.is_cluster_name(col, remapped))
+                                       else None)
+                    # No validation needed when Phase 2 is off
                     if matched:
                         final = matched
                         collapsed = True
                         collapse_rule = det_rule
 
-            # --- Cluster gate (v2: with new-cluster registration) ---
-            _col_has_vocab = ma and ma.is_ready(col)
-            if not _col_has_vocab:
-                # No cluster vocabulary (e.g. Treatment) — sibling snap
-                if final and not is_ns(final) and ctx_counts:
-                    _norm_final = final.lower().strip()
-                    _best = None
-                    _best_count = 0
-                    for sib, cnt in ctx_counts.items():
-                        _norm_sib = sib.lower().strip()
-                        _overlap = sum(
-                            1 for w in _norm_final.split()
-                            if w in _norm_sib.split())
-                        _total_words = max(1, len(_norm_final.split()))
-                        if (_norm_sib in _norm_final or
-                            _norm_final in _norm_sib or
-                            (_overlap / _total_words) >= 0.6):
-                            if cnt > _best_count:
-                                _best = sib
-                                _best_count = cnt
-                    if _best and _best != final:
-                        final = _best
-                        collapse_rule = "treatment_sibling_snap"
-                if final and not is_ns(final):
-                    collapsed = True
-                    collapse_rule = collapse_rule or "raw_extraction"
+            # ── LLM sibling collapse (Phase 2 OFF only) ──
+            # When no biomedical DB, use a single LLM call to normalise
+            # the extracted label against sibling labels from this GSE.
+            if (not self.enable_phase2 and not collapsed
+                    and not is_ns(out1) and ctx_labels):
+                non_ns_siblings = [
+                    l for l in ctx_labels if not is_ns(l) and l != out1]
+                if non_ns_siblings:
+                    prompt_tpl = PER_LABEL_COLLAPSE_PROMPTS.get(col)
+                    if prompt_tpl:
+                        cand_str = "\n".join(
+                            f"  {i+1}. {c}"
+                            for i, c in enumerate(non_ns_siblings))
+                        sib_str = ", ".join(
+                            f"{l} ({ctx_counts.get(l, 0)}x)"
+                            for l in non_ns_siblings[:10])
+                        prompt = (prompt_tpl
+                                  .replace("{RAW_LABEL}", out1)
+                                  .replace("{CANDIDATES}", cand_str)
+                                  .replace("{SIBLING_LABELS}", sib_str))
+                        resp = self._llm_with_model(
+                            self.EXTRACT_MODEL, prompt, max_tokens=60)
+                        if resp:
+                            resp = resp.strip().strip('"').strip("'")
+                            # Accept only if it matches a known sibling
+                            for sib in non_ns_siblings:
+                                if resp.lower().strip() == sib.lower().strip():
+                                    final = sib
+                                    collapsed = True
+                                    collapse_rule = "llm_sibling_collapse"
+                                    break
 
-            elif ma and final != NS and not collapsed:
-                # Cluster gate for Tissue/Condition
-                if not ma.is_cluster_name(col, final):
-                    remapped = ma.cluster_lookup(col, final)
-                    if remapped and ma.is_cluster_name(col, remapped):
-                        final = remapped
-                        collapse_rule = (collapse_rule or "") + "+gate_remap"
+            # ── Cluster gate / sibling snap ──
+            if self.enable_phase2 and ma:
+                _col_has_vocab = ma.is_ready(col)
+                if not _col_has_vocab:
+                    # Treatment: sibling snap (word overlap)
+                    if final and not is_ns(final) and ctx_counts:
+                        final, collapse_rule = self._sibling_snap(
+                            final, ctx_counts, collapse_rule)
+                    if final and not is_ns(final):
                         collapsed = True
-                    else:
-                        # Check if novel entity deserves new cluster
-                        _is_novel = (
-                            final and len(final.strip()) >= 4 and
-                            not is_ns(final) and
-                            not any(w in final.lower()
-                                    for w in ("unknown", "unspecified", "n/a",
-                                              "na", "none", "other", "not ",
-                                              "mixed")))
-                        if _is_novel and ma:
-                            ma.register_new_cluster(
-                                col, final.strip(), out1, log_fn=self._log)
-                            collapsed = True
-                            collapse_rule = (collapse_rule or "") + "+new_cluster"
-                        else:
-                            final = NS
-                            collapsed = False
-                            collapse_rule = (collapse_rule or "") + "+gate_rejected"
+                        collapse_rule = collapse_rule or "raw_extraction"
 
-            # --- Episodic memory write (post-gate) ---
-            if ma and final != out1 and not is_ns(final):
-                do_log, conf, _ = ma.should_log(col, out1, final, collapse_rule)
-                if do_log:
-                    ma.log_resolution(
-                        col=col,
-                        raw_label=out1,
-                        canonical=final,
-                        confidence=conf,
-                        platform=self.platform,
-                        gse=self.gse_id,
-                        gsm=gsm,
-                        collapse_rule=collapse_rule,
-                    )
+                elif final != NS and not collapsed:
+                    # Cluster gate for Tissue/Condition
+                    if not ma.is_cluster_name(col, final):
+                        remapped = ma.cluster_lookup(col, final)
+                        if remapped and ma.is_cluster_name(col, remapped):
+                            final = remapped
+                            collapse_rule = (
+                                (collapse_rule or "") + "+gate_remap")
+                            collapsed = True
+                        else:
+                            _is_novel = (
+                                final and len(final.strip()) >= 4
+                                and not is_ns(final)
+                                and not any(
+                                    w in final.lower()
+                                    for w in ("unknown", "unspecified",
+                                              "n/a", "na", "none",
+                                              "other", "not ", "mixed")))
+                            if _is_novel:
+                                ma.register_new_cluster(
+                                    col, final.strip(), out1,
+                                    log_fn=self._log)
+                                collapsed = True
+                                collapse_rule = (
+                                    (collapse_rule or "") + "+new_cluster")
+                            else:
+                                final = NS
+                                collapsed = False
+                                collapse_rule = (
+                                    (collapse_rule or "") + "+gate_rejected")
+
+                # Episodic memory write (post-gate)
+                if final != out1 and not is_ns(final):
+                    do_log, conf, _ = ma.should_log(
+                        col, out1, final, collapse_rule)
+                    if do_log:
+                        ma.log_resolution(
+                            col=col, raw_label=out1, canonical=final,
+                            confidence=conf, platform=self.platform,
+                            gse=self.gse_id, gsm=gsm,
+                            collapse_rule=collapse_rule)
+            else:
+                # Phase 2 OFF: sibling snap for Treatment, pass-through others
+                if final and not is_ns(final) and ctx_counts:
+                    final, collapse_rule = self._sibling_snap(
+                        final, ctx_counts, collapse_rule)
+                if final and not is_ns(final):
+                    collapse_rule = collapse_rule or "raw_extraction"
 
             return col, final if not is_ns(final) else NS, collapse_rule
 
