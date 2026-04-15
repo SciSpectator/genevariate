@@ -20,6 +20,9 @@ ollama
 # Quantile normalization (optional but recommended)
 qnorm
 
+# Image handling (app icon / logo in GUI)
+Pillow
+
 # Tkinter is part of Python stdlib but may need system package:
 #   Ubuntu/Debian: sudo apt install python3-tk
 #   Fedora: sudo dnf install python3-tkinter
