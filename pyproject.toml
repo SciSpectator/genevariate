@@ -36,6 +36,7 @@ dependencies = [
     "psutil",
     "ollama",
     "qnorm",
+    "Pillow",
 ]
 
 [project.optional-dependencies]

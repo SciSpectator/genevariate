@@ -46,6 +46,7 @@ _REQUIRED = [
     ("psutil", None),
     ("ollama", None),
     ("qnorm", None),
+    ("Pillow", "PIL"),
 ]
 
 

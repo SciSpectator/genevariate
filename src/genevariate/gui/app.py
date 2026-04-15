@@ -9429,6 +9429,28 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
     def _setup_ui(self):
         """Sets up the complete user interface with ALL features - NO SIMPLIFICATIONS."""
+        # ── Header banner with logo ──
+        header_frame = tk.Frame(self, bg="#f0f4f8", relief="flat", bd=0)
+        header_frame.pack(fill=tk.X, padx=0, pady=0)
+        try:
+            from PIL import Image, ImageTk
+            _icon_path = Path(__file__).parent.parent / "assets" / "icon.png"
+            if _icon_path.exists():
+                _pil_img = Image.open(str(_icon_path))
+                _pil_img = _pil_img.resize((64, 64), Image.LANCZOS)
+                self._header_logo_img = ImageTk.PhotoImage(_pil_img)
+                tk.Label(header_frame, image=self._header_logo_img, bg="#f0f4f8").pack(side=tk.LEFT, padx=(15, 8), pady=8)
+        except Exception:
+            pass  # Pillow not available — skip logo image
+        title_block = tk.Frame(header_frame, bg="#f0f4f8")
+        title_block.pack(side=tk.LEFT, pady=8)
+        tk.Label(title_block, text="GeneVariate", font=("Segoe UI", 20, "bold"),
+                 fg="#1a5276", bg="#f0f4f8").pack(anchor=tk.W)
+        tk.Label(title_block, text="Gene Expression Variability Analysis Platform",
+                 font=("Segoe UI", 10), fg="#5d6d7e", bg="#f0f4f8").pack(anchor=tk.W)
+        # Thin accent line under header
+        tk.Frame(self, bg="#2e86c1", height=3).pack(fill=tk.X)
+
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=5, pady=2)
         self.status_label = ttk.Label(status_frame, text="Ready", foreground="gray", font=('Segoe UI', 9))
