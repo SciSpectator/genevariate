@@ -181,7 +181,7 @@ def setup():
     print(f"  Memory    : {mem_path} {'(exists)' if os.path.exists(mem_path) else '(new)'}")
     print(f"  Output    : {output_dir}")
 
-    model = CONFIG.get('ai', {}).get('model', 'gemma2:9b')
+    model = CONFIG.get('ai', {}).get('model', 'gemma4:e2b')
     print(f"  LLM model : {model}")
     print(f"  Platforms : {', '.join(GPL_PLATFORMS)}")
 
@@ -1301,7 +1301,7 @@ def make_report(hp1, hrc, jp1, jrc, out,
          f"  Generated : {datetime.now().strftime('%Y-%m-%d %H:%M')}",
          f"  Platforms : {', '.join(GPL_PLATFORMS)}",
          f"  Phase 2 NS curation: {', '.join(NS_CURATE_FIELDS)} only",
-         f"  Phase 3: LLM Curator (cross-experiment label harmonization via gemma2:9b)",
+         f"  Phase 3: LLM Curator (cross-experiment label harmonization via gemma4:e2b)",
          "=" * 70]
     _metric_block(L, "HUMAN EVALUATION", hp1, hrc,
                   norm_stats=h_norm_stats, norm_items=h_norm_items,

@@ -2,7 +2,7 @@
 """
 Label Re-extraction CLI — Context-enriched re-extraction for "Not Specified" labels.
 
-Uses Ollama (gemma2:9b) with a GSE context cache that:
+Uses Ollama (gemma4:e2b) with a GSE context cache that:
 1. Loads existing extracted labels (with "Not Specified" entries)
 2. Groups samples by GSE (experiment) — samples in the same experiment share context
 3. For each "Not Specified" sample, builds an enriched context from:
@@ -38,7 +38,7 @@ import requests
 #  Configuration
 # ═══════════════════════════════════════════════════════════════════
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma2:9b"
+MODEL = "gemma4:e2b"
 LABEL_COLUMNS = ["Condition", "Tissue", "Age", "Treatment", "Treatment Time"]
 NOT_SPECIFIED = {"Not Specified", "not specified", "NOT SPECIFIED",
                  "N/A", "n/a", "NA", "nan", "NaN", "", "Unknown", "unknown"}
@@ -809,7 +809,7 @@ Examples:
     --output GPL570_corrected.csv.gz
 
   # Custom model
-  python label_reextraction.py --labels labels.csv --model gemma2:9b --output corrected.csv
+  python label_reextraction.py --labels labels.csv --model gemma4:e2b --output corrected.csv
         """
     )
     parser.add_argument("--labels", default=None,

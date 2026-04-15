@@ -408,7 +408,7 @@ class GSEWorker:
       Phase 2:   GSE context rescue for remaining NS
     """
 
-    def __init__(self, gse_id, ctx, mem_agent=None, model="gemma2:9b",
+    def __init__(self, gse_id, ctx, mem_agent=None, model="gemma4:e2b",
                  platform="", log_fn=None,
                  enable_phase15=True, enable_phase2=True,
                  ollama_url=None):
@@ -817,11 +817,12 @@ except ImportError:
     _HAS_PSUTIL = False
 
 MODEL_RAM_GB = {
+    "gemma4:e2b": 7.2,
     "gemma2:2b": 2.0, "gemma2:9b": 5.4, "gemma2:9b-q4_0": 5.0,
     "gemma2:27b": 18.0, "llama3:8b": 5.5, "llama3.1:8b": 5.5,
     "mistral:7b": 4.8, "qwen2.5:7b": 4.4,
 }
-DEFAULT_MODEL_GB = 5.4
+DEFAULT_MODEL_GB = 7.2
 DEFAULT_URL = "http://localhost:11434"
 CPU_OLLAMA_URL = "http://localhost:11435"
 _CPU_OLLAMA_ACTIVE = False
@@ -854,7 +855,7 @@ def ollama_server_ok(base_url=DEFAULT_URL, timeout=3):
         return False
 
 
-def compute_ollama_parallel(model="gemma2:9b", reserve_gb=4.0, extra_vram_gb=0.0):
+def compute_ollama_parallel(model="gemma4:e2b", reserve_gb=4.0, extra_vram_gb=0.0):
     """
     Compute HYBRID worker count: GPU workers + CPU workers.
     Returns (total, gpu_workers, cpu_workers).

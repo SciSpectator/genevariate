@@ -329,7 +329,11 @@ class CustomCompareWindow(tk.Toplevel):
                     # histogram bin_width = (max - min) / n_bins
                     # scaled_kde = kde_density * n_samples * bin_width
                     n_bins = 30
-                    bin_width = (values_clean.max() - values_clean.min()) / n_bins
+                    data_range = values_clean.max() - values_clean.min()
+                    if data_range < 1e-12:
+                        # Constant data — skip KDE (would produce invisible line)
+                        raise ValueError("constant data")
+                    bin_width = data_range / n_bins
                     kde_scaled = kde_vals * len(values_clean) * bin_width
 
                     ax_overlay.plot(x_range, kde_scaled,
@@ -347,10 +351,11 @@ class CustomCompareWindow(tk.Toplevel):
         ax_overlay.set_xlabel('Expression Value', fontsize=12, fontweight='bold')
         ax_overlay.set_ylabel('Frequency', fontsize=12, fontweight='bold')
         ax_overlay.set_title('Overlaid Distribution Comparison', fontsize=14, fontweight='bold', pad=15)
-        ax_overlay.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax_overlay.grid(True, alpha=0.3, linestyle='--')
-        
-        plt.tight_layout()
+
+        fig_overlay.tight_layout()
+        fig_overlay.subplots_adjust(right=0.75)
+        ax_overlay.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
         
         # Embed overlay
         canvas_overlay = FigureCanvasTkAgg(fig_overlay, master=self.overlay_tab)

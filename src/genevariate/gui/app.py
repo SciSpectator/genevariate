@@ -96,7 +96,7 @@ except ImportError:
 #  GPU DETECTION + VRAM/RAM WATCHDOG
 # ═══════════════════════════════════════════════════════════════
 MODEL_RAM_GB = {
-    'gemma2:2b': 2.0, 'gemma2:9b': 6.0, 'gemma2:27b': 18.0,
+    'gemma4:e2b': 7.2, 'gemma2:27b': 18.0,
     'llama3:8b': 6.0, 'mistral:7b': 5.0,
 }
 
@@ -414,7 +414,7 @@ CONFIG = {
     },
     'database': {'sql_chunk_size': 500},
     'ai': {
-        'model': 'gemma2:9b',
+        'model': 'gemma4:e2b',
         'embedding_model': 'all-MiniLM-L6-v2',
         'device': 'cpu'
     },
@@ -474,7 +474,7 @@ class SampleClassificationAgent:
             avail = [m.get('name', m.get('model', '')) for m in models_resp.get('models', [])]
             if not avail:
                 self.log("[Agent ERROR] Ollama running but NO MODELS installed.")
-                self.log("[Agent ERROR] Fix: run 'ollama pull gemma2:9b' in terminal")
+                self.log("[Agent ERROR] Fix: run 'ollama pull gemma4:e2b' in terminal")
                 return pd.DataFrame()
             self.log(f"[Agent] OK Ollama running, models: {', '.join(avail[:4])}")
         except Exception as e:
@@ -519,11 +519,11 @@ class SampleClassificationAgent:
         if not _OLLAMA_MODEL:
             _OLLAMA_MODEL = _detect_ollama_model()
         if not _OLLAMA_MODEL:
-            self.log("[Agent ERROR] No Ollama model found. Run: ollama pull gemma2:9b")
+            self.log("[Agent ERROR] No Ollama model found. Run: ollama pull gemma4:e2b")
             return pd.DataFrame()
         self.log(f"[Agent] Using model: {_OLLAMA_MODEL}")
 
-        # Detect fast extraction model (gemma2:2b)
+        # Detect fast extraction model (gemma4:e2b)
         if not _OLLAMA_EXTRACTION_MODEL:
             _OLLAMA_EXTRACTION_MODEL = _detect_extraction_model() or _OLLAMA_MODEL
         if _OLLAMA_EXTRACTION_MODEL != _OLLAMA_MODEL:
@@ -679,7 +679,7 @@ class SampleClassificationAgent:
                 self.log(f"[Agent ERROR] Reason: {first_error}")
             self.log("[Agent ERROR]   1. Is Ollama running? -> 'ollama serve'")
             self.log("[Agent ERROR]   2. Is a model installed? -> 'ollama list'")
-            self.log("[Agent ERROR]   3. Pull a model: 'ollama pull gemma2:9b'")
+            self.log("[Agent ERROR]   3. Pull a model: 'ollama pull gemma4:e2b'")
             return pd.DataFrame()
 
         self.log(f"[Agent] OK Extraction complete: {len(results)} samples")
@@ -2060,7 +2060,7 @@ def get_comprehensive_gsm_text(gsm_row):
 
 def _detect_ollama_model():
     """Auto-detect best available Ollama model via ollama library."""
-    preferred = [CONFIG['ai']['model'], 'gemma2:9b', 'gemma2', 'llama3:8b',
+    preferred = [CONFIG['ai']['model'], 'gemma4:e2b', 'gemma2', 'llama3:8b',
                  'llama3', 'llama2', 'mistral', 'phi3', 'qwen2']
     try:
         models_resp = ollama.list()
@@ -2087,14 +2087,14 @@ def _detect_ollama_model():
             print(f"[LLM] Model detection failed: {e}")
         return None
 
-_OLLAMA_MODEL = None  # cached (collapse model: gemma2:9b)
-_OLLAMA_EXTRACTION_MODEL = None  # cached (fast extraction model: gemma2:2b)
+_OLLAMA_MODEL = None  # cached (collapse model: gemma4:e2b)
+_OLLAMA_EXTRACTION_MODEL = None  # cached (fast extraction model: gemma4:e2b)
 _OLLAMA_URL = "http://localhost:11434"
 
 
 def _detect_extraction_model():
-    """Detect fast extraction model (gemma2:2b preferred, falls back to main model)."""
-    preferred_fast = ['gemma2:2b', 'gemma2:2b-q4_0', 'gemma3:1b']
+    """Detect fast extraction model (gemma4:e2b preferred, falls back to main model)."""
+    preferred_fast = ['gemma4:e2b', 'gemma4:e2b-q4_0', 'gemma3:1b']
     try:
         models_resp = ollama.list()
         available = [m.get('name', m.get('model', '')) for m in models_resp.get('models', [])]
@@ -2107,7 +2107,7 @@ def _detect_extraction_model():
                 print(f"[LLM] Fast extraction model: {found}")
                 return found
         # No fast model found — fall back to main model
-        print("[LLM] No fast extraction model (gemma2:2b) — using main model")
+        print("[LLM] No fast extraction model (gemma4:e2b) — using main model")
         return None
     except Exception:
         return None
@@ -2230,7 +2230,7 @@ def _ollama_post(prompt, model=None, num_predict=None, num_ctx=None,
         if mdl:
             _OLLAMA_MODEL = mdl
         else:
-            raise OllamaServerError("No Ollama model detected. Run: ollama pull gemma2:9b")
+            raise OllamaServerError("No Ollama model detected. Run: ollama pull gemma4:e2b")
 
     options = {'temperature': 0.0}
     if num_predict is not None:
@@ -2289,7 +2289,7 @@ def compute_ollama_parallel(model=None, base_url=None, reserve_gb=3.0):
     """
     KV_CACHE_PER_SLOT = 1.0  # ~1GB per slot at num_ctx=1024 for 9B model
     url = base_url or _OLLAMA_URL
-    mdl = model or _OLLAMA_MODEL or 'gemma2:9b'
+    mdl = model or _OLLAMA_MODEL or 'gemma4:e2b'
 
     # Model size estimate
     param_match = re.search(r'(\d+)[bB]', mdl)
@@ -2445,7 +2445,7 @@ def classify_sample(gsm_row, fields=None, custom_fields=None):
         if gse_id and gse_id.lower() not in ('nan', 'none', ''):
             if gse_id not in _GSE_WORKERS:
                 ctx = _GSE_CONTEXTS.get(gse_id, GSEContext(gse_id))
-                model = _OLLAMA_MODEL or CONFIG.get('ai', {}).get('model', 'gemma2:9b')
+                model = _OLLAMA_MODEL or CONFIG.get('ai', {}).get('model', 'gemma4:e2b')
                 platform = str(gsm_row.get('gpl', gsm_row.get('platform', ''))).strip()
                 _GSE_WORKERS[gse_id] = GSEWorker(
                     gse_id, ctx, mem_agent=_MEMORY_AGENT,
@@ -2478,7 +2478,7 @@ def _classify_sample_llm(gsm_row, fields=None, custom_fields=None):
     """Pure LLM extraction fallback — used when MemoryAgent not available.
 
     Performance optimisations:
-        1. Uses gemma2:2b (fast model) for extraction — 4-5x faster than 9b
+        1. Uses gemma4:e2b (fast model) for extraction — 4-5x faster than 9b
         2. System prompt sent as system role — Ollama caches KV (~40% speedup)
         3. keep_alive=-1 prevents model unloading between calls
         4. Compact user message (only metadata) — minimises per-call tokens
@@ -4604,11 +4604,14 @@ class InteractiveSubsetAnalyzerWindow(tk.Toplevel):
         ax.set_ylabel(ylabel)
 
         if len(unique_grps) <= 15:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-        fig.tight_layout()
+            fig.tight_layout()
+            fig.subplots_adjust(right=0.75)
+            ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
+        else:
+            fig.tight_layout()
 
         ax.text(0.5, -0.08,
-                'Click points to inspect  •  Shift+click multi-select  •  Double-click clear',
+                'Click to inspect  •  Shift+click multi-select  •  Ctrl+click full detail  •  Dbl-click clear',
                 transform=ax.transAxes, fontsize=7.5, ha='center',
                 color='#777', style='italic')
 
@@ -4667,6 +4670,33 @@ class InteractiveSubsetAnalyzerWindow(tk.Toplevel):
             key = f"{ci}"
 
             shift = bool(event.mouseevent.key == 'shift')
+            ctrl = bool(event.mouseevent.key == 'control')
+
+            # Ctrl+click → open full detail popup
+            if ctrl:
+                gsm = self.df.iloc[ci].get('GSM', f'#{ci}')
+                detail_top = tk.Toplevel(self.winfo_toplevel())
+                detail_top.title(f"Sample Detail — {gsm}")
+                detail_top.geometry("650x450")
+                detail_rows = []
+                row = self.df.iloc[ci]
+                for col in self.df.columns:
+                    val = row[col]
+                    val_str = str(val) if pd.notna(val) else ''
+                    if val_str and val_str.lower() not in ('nan', 'none'):
+                        detail_rows.append((col, val_str[:500]))
+                dtv = ttk.Treeview(detail_top, columns=('Field', 'Value'),
+                                    show='headings', height=20)
+                dtv.heading('Field', text='Field')
+                dtv.heading('Value', text='Value')
+                dtv.column('Field', width=160, anchor=tk.W)
+                dtv.column('Value', width=460, anchor=tk.W)
+                for f, v in detail_rows:
+                    dtv.insert('', tk.END, values=(f, v))
+                dtv.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+                ttk.Button(detail_top, text="Close",
+                           command=detail_top.destroy).pack(pady=4)
+                return
 
             if key in sel_anns:
                 sel_anns[key].remove()
@@ -4757,9 +4787,15 @@ class CompareDistributionsWindow(tk.Toplevel):
         # Visual State
         self.figs = {}
         self.canvases = {}
-        self.toolbars = {}             
+        self.toolbars = {}
         self.plot_refs = {}
-        self.active_artists = {} 
+        self.active_artists = {}
+
+        # Linked Brushing State
+        self._brushed_gsms = set()          # shared selection across all tabs
+        self._scatter_data = {}             # key -> {ax, X_2d, gsms, labels, scatter_artists}
+        self._brush_highlights = {}         # key -> list of highlight artists
+        self._selectors = []                # keep references to prevent GC
 
         # Check Matplotlib
         try:
@@ -4942,7 +4978,22 @@ class CompareDistributionsWindow(tk.Toplevel):
                             command=lambda v=val: self._set_dist_mode(v))
             btn.pack(side=tk.LEFT, padx=2)
             self._dist_mode_btns[val] = (btn, clr)
-        
+
+        # ── Color palette selector ──
+        ttk.Separator(dist_ctrl_frame, orient='vertical').pack(
+            side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+        tk.Label(dist_ctrl_frame, text="Palette:",
+                 font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 4))
+        self._palette_var = tk.StringVar(value="husl")
+        palette_combo = ttk.Combobox(
+            dist_ctrl_frame, textvariable=self._palette_var, state='readonly',
+            values=["husl", "tab10", "Set2", "Paired",
+                    "colorblind", "dark", "pastel", "bright"],
+            width=10)
+        palette_combo.pack(side=tk.LEFT, padx=2)
+        palette_combo.bind('<<ComboboxSelected>>',
+                           lambda e: self._replot_distributions())
+
         self.dist_scroll_frame = ScrollableCanvasFrame(self.dist_plot_container)
         self.dist_scroll_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
@@ -5738,6 +5789,17 @@ class CompareDistributionsWindow(tk.Toplevel):
         # PCA/t-SNE and Clustering tabs run on-demand via their Run buttons
 
 
+    def _replot_distributions(self, event=None):
+        """Re-render distribution plot with current palette selection."""
+        if self.current_view_key:
+            # Clear only the distribution plot, not all tabs
+            if "dist" in self.canvases:
+                self.canvases["dist"].get_tk_widget().destroy()
+                self.toolbars["dist"].destroy()
+                plt.close(self.figs["dist"])
+                del self.canvases["dist"], self.toolbars["dist"], self.figs["dist"]
+            self._plot_distributions(self.current_view_key)
+
     def _plot_distributions(self, title):
             """
             Plots distributions with distinct backgrounds, scaled visibility, and uncut legends.
@@ -5762,8 +5824,10 @@ class CompareDistributionsWindow(tk.Toplevel):
             
             # 2. Color Setup
             import seaborn as sns
-            # Palette for active groups (Bright/Distinct)
-            palette = sns.color_palette("husl", n_groups)
+            # Palette for active groups — user-selectable
+            _pal_name = getattr(self, '_palette_var', None)
+            _pal_name = _pal_name.get() if _pal_name else "husl"
+            palette = sns.color_palette(_pal_name, n_groups)
             colors = {k: mcolors.to_hex(c) for k, c in zip(self.current_data_map.keys(), palette)}
             
             # Palette for backgrounds (Greys/Blues/Darks) - distinct for multiple BGs
@@ -6078,18 +6142,19 @@ class CompareDistributionsWindow(tk.Toplevel):
         ax.set_title("Class Separation (strip plot)")
 
         ax.text(0.5, -0.12,
-                'Click points to inspect  •  Shift+click to multi-select  •  Double-click to clear',
+                'Click to inspect  •  Shift+click multi-select  •  Ctrl+click full detail  •  Dbl-click clear',
                 transform=ax.transAxes, fontsize=7.5, ha='center',
                 color='#777777', style='italic')
 
         h = [mpatches.Patch(color=cdict[k], label=k) for k in keys]
+        fig.tight_layout()
+        fig.subplots_adjust(right=0.75)
         leg = ax.legend(handles=h, title="Groups", loc='upper left', bbox_to_anchor=(1.01, 1))
         self._make_legend_interactive(fig, leg, cdict, {}, keys)
-        fig.tight_layout()
 
         # Rectangle selector for multi-sample selection
         X_2d = np.column_stack([all_x, all_y])
-        self._add_rect_selector(fig, ax, X_2d, all_groups, all_gsms.tolist(), sf)
+        self._add_rect_selector(fig, ax, X_2d, all_groups, all_gsms.tolist(), sf, plot_key="sep")
 
         self._embed_plot(fig, sf, "sep")
 
@@ -6140,6 +6205,14 @@ class CompareDistributionsWindow(tk.Toplevel):
             key = f"{gsm}_{ci}"
 
             shift = bool(event.mouseevent.key == 'shift')
+            ctrl = bool(event.mouseevent.key == 'control')
+
+            # Ctrl+click → open full detail popup
+            if ctrl:
+                self._open_sample_detail_popup(
+                    gsm, group_label=all_groups[ci],
+                    expression_val=all_y[ci])
+                return
 
             if key in sel_anns:
                 sel_anns[key].remove()
@@ -6287,7 +6360,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             plt.subplots_adjust(left=0.08, right=0.72, top=0.92, bottom=0.08)
 
             # Rectangle selector for multi-sample selection
-            self._add_rect_selector(fig, ax, X_2d, L, all_gsms, sf)
+            self._add_rect_selector(fig, ax, X_2d, L, all_gsms, sf, plot_key="dimred")
 
             self._embed_plot(fig, sf, "dimred")
             self.status_label.config(text=f"{method} complete — {len(X):,} samples plotted")
@@ -6307,18 +6380,37 @@ class CompareDistributionsWindow(tk.Toplevel):
                       foreground='red').pack(pady=20)
             import traceback; traceback.print_exc()
 
-    def _add_rect_selector(self, fig, ax, X_2d, labels, gsms, scroll_frame):
-        """Add a rectangle drag selector to scatter plots for multi-sample selection."""
-        from matplotlib.widgets import RectangleSelector
+    def _add_rect_selector(self, fig, ax, X_2d, labels, gsms, scroll_frame,
+                            plot_key=None):
+        """
+        Add Rectangle + Lasso selection tools to scatter plots.
 
-        info_label = ttk.Label(scroll_frame, text="Drag a rectangle on the plot to select samples",
-                               font=('Segoe UI', 9, 'italic'), foreground='#888')
-        info_label.pack(pady=2)
+        Selection feeds into the linked brushing system — selecting samples
+        in any plot highlights them across ALL other analysis tabs.
+        """
+        from matplotlib.widgets import RectangleSelector, LassoSelector
+        from matplotlib.path import Path as MplPath
 
-        def on_select(eclick, erelease):
-            x1, y1 = min(eclick.xdata, erelease.xdata), min(eclick.ydata, erelease.ydata)
-            x2, y2 = max(eclick.xdata, erelease.xdata), max(eclick.ydata, erelease.ydata)
-            mask = (X_2d[:, 0] >= x1) & (X_2d[:, 0] <= x2) & (X_2d[:, 1] >= y1) & (X_2d[:, 1] <= y2)
+        # Register scatter data for linked brushing
+        if plot_key is None:
+            plot_key = f"_anon_{id(fig)}"
+        self._scatter_data[plot_key] = {
+            'ax': ax, 'fig': fig, 'X_2d': X_2d,
+            'gsms': list(gsms), 'labels': np.asarray(labels),
+        }
+
+        # ── Control bar ──
+        ctrl = ttk.Frame(scroll_frame)
+        ctrl.pack(fill=tk.X, pady=2)
+
+        mode_var = tk.StringVar(value="rect")
+        info_label = ttk.Label(
+            ctrl, text="Drag to select  |  Rectangle mode",
+            font=('Segoe UI', 9, 'italic'), foreground='#888')
+        info_label.pack(side=tk.LEFT, padx=8)
+
+        # ── Common selection handler ──
+        def _handle_selection(mask):
             n_sel = mask.sum()
             if n_sel == 0:
                 info_label.config(text="No samples in selection")
@@ -6326,11 +6418,16 @@ class CompareDistributionsWindow(tk.Toplevel):
             sel_labels = labels[mask]
             sel_gsms = [gsms[i] for i in np.where(mask)[0]]
 
-            # Count per group
+            # Update linked brushing state
+            self._brushed_gsms = set(sel_gsms)
+            self._sync_brush(source_key=plot_key)
+
             from collections import Counter
             counts = Counter(sel_labels)
             summary = ", ".join(f"{k}: {v}" for k, v in counts.most_common(5))
-            info_label.config(text=f"Selected {n_sel} samples — {summary}")
+            info_label.config(
+                text=f"Selected {n_sel} samples — {summary}  "
+                     f"(brushed across all tabs)")
 
             # Show popup with details
             top = tk.Toplevel(self)
@@ -6339,18 +6436,20 @@ class CompareDistributionsWindow(tk.Toplevel):
             try:
                 _sw, _sh = top.winfo_screenwidth(), top.winfo_screenheight()
                 top.geometry(f"700x500+{(_sw-700)//2}+{(_sh-500)//2}")
-            except: pass
+            except Exception:
+                pass
 
-            # Summary
-            ttk.Label(top, text=f"Selected {n_sel} samples from rectangle region",
+            ttk.Label(top, text=f"Selected {n_sel} samples  •  "
+                      f"highlighted across all tabs",
                       font=('Segoe UI', 11, 'bold')).pack(padx=10, pady=(10, 5))
 
-            # Table
             tv_frame = ttk.Frame(top)
             tv_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
             cols = ("GSM", "Group")
-            tree = ttk.Treeview(tv_frame, columns=cols, show="headings", height=15)
-            vsb = ttk.Scrollbar(tv_frame, orient="vertical", command=tree.yview)
+            tree = ttk.Treeview(tv_frame, columns=cols, show="headings",
+                                 height=15)
+            vsb = ttk.Scrollbar(tv_frame, orient="vertical",
+                                 command=tree.yview)
             tree.configure(yscrollcommand=vsb.set)
             tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             vsb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -6361,25 +6460,193 @@ class CompareDistributionsWindow(tk.Toplevel):
             for g, l in zip(sel_gsms, sel_labels):
                 tree.insert("", tk.END, values=(g, l))
 
-            # Save button
             btn_f = ttk.Frame(top, padding=5)
             btn_f.pack(fill=tk.X)
+
             def _save():
-                path = filedialog.asksaveasfilename(defaultextension=".csv",
+                path = filedialog.asksaveasfilename(
+                    defaultextension=".csv",
                     filetypes=[("CSV", "*.csv")], parent=top)
                 if path:
-                    pd.DataFrame({'GSM': sel_gsms, 'Group': sel_labels}).to_csv(path, index=False)
-                    messagebox.showinfo("Saved", f"Saved {n_sel} samples", parent=top)
-            ttk.Button(btn_f, text="Save to CSV", command=_save).pack(side=tk.LEFT, padx=5)
-            ttk.Button(btn_f, text="Close", command=top.destroy).pack(side=tk.RIGHT, padx=5)
+                    pd.DataFrame({'GSM': sel_gsms,
+                                  'Group': sel_labels}).to_csv(path,
+                                                               index=False)
+                    messagebox.showinfo("Saved", f"Saved {n_sel} samples",
+                                        parent=top)
 
-        rs = RectangleSelector(ax, on_select, useblit=True,
-                                button=[1], interactive=True,
-                                props=dict(facecolor='yellow', alpha=0.2, edgecolor='red', linewidth=2))
-        # Keep reference to prevent GC
-        if not hasattr(self, '_rect_selectors'):
-            self._rect_selectors = []
-        self._rect_selectors.append(rs)
+            def _clear_brush():
+                self._brushed_gsms.clear()
+                self._sync_brush()
+                info_label.config(text="Brush cleared")
+                top.destroy()
+
+            ttk.Button(btn_f, text="Save to CSV",
+                       command=_save).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_f, text="Clear Brush",
+                       command=_clear_brush).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_f, text="Close",
+                       command=top.destroy).pack(side=tk.RIGHT, padx=5)
+
+        # ── Rectangle callback ──
+        def _on_rect(eclick, erelease):
+            x1 = min(eclick.xdata, erelease.xdata)
+            y1 = min(eclick.ydata, erelease.ydata)
+            x2 = max(eclick.xdata, erelease.xdata)
+            y2 = max(eclick.ydata, erelease.ydata)
+            mask = ((X_2d[:, 0] >= x1) & (X_2d[:, 0] <= x2) &
+                    (X_2d[:, 1] >= y1) & (X_2d[:, 1] <= y2))
+            _handle_selection(mask)
+
+        # ── Lasso callback ──
+        def _on_lasso(verts):
+            path = MplPath(verts)
+            mask = np.array([path.contains_point(pt) for pt in X_2d])
+            _handle_selection(mask)
+
+        # ── Create both selectors (only one active at a time) ──
+        rs = RectangleSelector(
+            ax, _on_rect, useblit=True, button=[1], interactive=True,
+            props=dict(facecolor='yellow', alpha=0.2,
+                       edgecolor='red', linewidth=2))
+
+        ls = LassoSelector(ax, _on_lasso,
+                            props=dict(color='red', linewidth=2))
+        ls.set_active(False)  # start with rectangle mode
+
+        # Store for GC prevention
+        self._selectors.extend([rs, ls])
+
+        # ── Mode toggle buttons ──
+        def _set_mode(m):
+            mode_var.set(m)
+            if m == "rect":
+                rs.set_active(True)
+                ls.set_active(False)
+                info_label.config(text="Drag to select  |  Rectangle mode")
+            else:
+                rs.set_active(False)
+                ls.set_active(True)
+                info_label.config(text="Draw freehand to select  |  Lasso mode")
+
+        rect_btn = ttk.Button(ctrl, text="Rectangle",
+                               command=lambda: _set_mode("rect"), width=10)
+        rect_btn.pack(side=tk.RIGHT, padx=2)
+        lasso_btn = ttk.Button(ctrl, text="Lasso",
+                                command=lambda: _set_mode("lasso"), width=10)
+        lasso_btn.pack(side=tk.RIGHT, padx=2)
+
+        def _clear():
+            self._brushed_gsms.clear()
+            self._sync_brush()
+            info_label.config(text="Brush cleared")
+
+        ttk.Button(ctrl, text="Clear Brush",
+                   command=_clear, width=12).pack(side=tk.RIGHT, padx=2)
+
+    # ------------------------------------------------------------------
+    # Linked Brushing — highlight selected samples across all tabs
+    # ------------------------------------------------------------------
+
+    def _sync_brush(self, source_key=None):
+        """
+        Highlight _brushed_gsms in every registered scatter plot.
+
+        For each plot: overlay orange-edged markers on brushed points,
+        and add a rug overlay on the distribution plot.
+        """
+        brushed = self._brushed_gsms
+
+        # ── Remove previous highlights ──
+        for key, artists in list(self._brush_highlights.items()):
+            for art in artists:
+                try:
+                    art.remove()
+                except Exception:
+                    pass
+            self._brush_highlights[key] = []
+
+        if not brushed:
+            # Redraw all affected canvases
+            for key in self._scatter_data:
+                fig = self._scatter_data[key].get('fig')
+                if fig and key in self.canvases:
+                    try:
+                        fig.canvas.draw_idle()
+                    except Exception:
+                        pass
+            # Also clear distribution brush
+            if 'dist_brush' in self._brush_highlights:
+                del self._brush_highlights['dist_brush']
+            if 'dist' in self.figs:
+                try:
+                    self.figs['dist'].canvas.draw_idle()
+                except Exception:
+                    pass
+            return
+
+        # ── Highlight in each scatter plot ──
+        for key, data in self._scatter_data.items():
+            ax = data['ax']
+            fig = data['fig']
+            X_2d = data['X_2d']
+            gsms = data['gsms']
+
+            # Find indices of brushed samples
+            indices = [i for i, g in enumerate(gsms) if g in brushed]
+            if not indices:
+                if key in self.canvases:
+                    try:
+                        fig.canvas.draw_idle()
+                    except Exception:
+                        pass
+                continue
+
+            idx = np.array(indices)
+            highlight_x = X_2d[idx, 0]
+            highlight_y = X_2d[idx, 1]
+
+            # Draw orange-ringed markers over selected points
+            sc = ax.scatter(
+                highlight_x, highlight_y,
+                s=120, facecolors='none', edgecolors='#FF6D00',
+                linewidths=2.5, zorder=10, label='_brushed')
+            self._brush_highlights.setdefault(key, []).append(sc)
+
+            if key in self.canvases:
+                try:
+                    fig.canvas.draw_idle()
+                except Exception:
+                    pass
+
+        # ── Highlight on distribution plot (rug overlay) ──
+        if 'dist' in self.figs and self.current_data_map:
+            try:
+                dist_fig = self.figs['dist']
+                dist_ax = dist_fig.axes[0] if dist_fig.axes else None
+                if dist_ax:
+                    # Collect expression values for brushed GSMs
+                    brush_vals = []
+                    for grp, vals in self.current_data_map.items():
+                        grp_gsms = self.group_gsm_map.get(grp, [])
+                        for g, v in zip(grp_gsms, vals):
+                            if g in brushed:
+                                brush_vals.append(v)
+
+                    if brush_vals:
+                        ylim = dist_ax.get_ylim()
+                        rug_h = (ylim[1] - ylim[0]) * 0.06
+                        arts = []
+                        for v in brush_vals:
+                            line = dist_ax.axvline(
+                                v, ymin=0, ymax=0.06,
+                                color='#FF6D00', linewidth=2,
+                                alpha=0.8, zorder=10)
+                            arts.append(line)
+                        self._brush_highlights.setdefault(
+                            'dist_brush', []).extend(arts)
+                        dist_fig.canvas.draw_idle()
+            except Exception:
+                pass
 
     # ═══════════════════════════════════════════════════════════════
     #  Clustering (DPC / K-Means)
@@ -6481,7 +6748,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             ax1.set_title(f"DBSCAN (eps={eps}, min_samples={min_samp})\n"
                          f"{n_clusters} clusters, {n_noise} noise points",
                          fontsize=11, weight='bold')
-            ax1.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.01, 1.0))
+            ax1.legend(fontsize=8, loc='upper right')
 
             # Right: contingency — true labels vs DBSCAN clusters
             uL = np.unique(L)
@@ -6500,16 +6767,18 @@ class CompareDistributionsWindow(tk.Toplevel):
             ax2.set_yticklabels([str(l)[:25] for l in uL], fontsize=8)
             ax2.set_xlabel("DBSCAN Cluster")
             ax2.set_title("True Labels vs DBSCAN Clusters", fontsize=11, weight='bold')
-            fig.colorbar(im, ax=ax2, label="Count")
+            fig.colorbar(im, ax=ax2, label="Count", shrink=0.8)
+            # Scale annotation font to grid size
+            _hm_fs = max(5, min(8, int(72 / max(len(uL), len(all_c), 1))))
             for i in range(len(uL)):
                 for j in range(len(all_c)):
                     if contingency[i, j] > 0:
                         ax2.text(j, i, str(contingency[i, j]), ha='center', va='center',
-                                fontsize=8, color='white' if contingency[i, j] > contingency.max()/2 else 'black')
+                                fontsize=_hm_fs, color='white' if contingency[i, j] > contingency.max()/2 else 'black')
 
             plt.subplots_adjust(left=0.06, right=0.85, top=0.90, bottom=0.08, wspace=0.35)
             X_2d_db = np.column_stack([all_scatter_x, all_scatter_y])
-            self._add_rect_selector(fig, ax1, X_2d_db, np.array(all_scatter_labels), all_scatter_gsms, sf)
+            self._add_rect_selector(fig, ax1, X_2d_db, np.array(all_scatter_labels), all_scatter_gsms, sf, plot_key="dbscan")
             self._embed_plot(fig, sf, "dbscan")
 
             # Stats
@@ -6594,7 +6863,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             ax1.set_ylabel("Expression")
             ax1.set_title(f"K-Means (K={k_val}) — Silhouette={sil:.3f}, ARI={ari:.3f}",
                          fontsize=11, weight='bold')
-            ax1.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.01, 1.0))
+            ax1.legend(fontsize=8, loc='upper right')
 
             # ── Plot 2: True labels vs clusters (contingency) ──
             uL = np.unique(L)
@@ -6610,18 +6879,19 @@ class CompareDistributionsWindow(tk.Toplevel):
             ax2.set_yticklabels([str(l)[:25] for l in uL], fontsize=8)
             ax2.set_xlabel("Cluster")
             ax2.set_title("True Labels vs K-Means Clusters", fontsize=11, weight='bold')
-            fig.colorbar(im, ax=ax2, label="Count")
+            fig.colorbar(im, ax=ax2, label="Count", shrink=0.8)
 
-            # Annotate cells
+            # Annotate cells — scale font to grid size
+            _hm_fs = max(5, min(8, int(72 / max(len(uL), k_val, 1))))
             for i in range(len(uL)):
                 for j in range(k_val):
                     if contingency[i, j] > 0:
                         ax2.text(j, i, str(contingency[i, j]), ha='center', va='center',
-                                fontsize=8, color='white' if contingency[i, j] > contingency.max()/2 else 'black')
+                                fontsize=_hm_fs, color='white' if contingency[i, j] > contingency.max()/2 else 'black')
 
             plt.subplots_adjust(left=0.06, right=0.85, top=0.92, bottom=0.08, wspace=0.35)
             X_2d_km = np.column_stack([all_scatter_x, all_scatter_y])
-            self._add_rect_selector(fig, ax1, X_2d_km, np.array(all_scatter_labels), all_scatter_gsms, sf)
+            self._add_rect_selector(fig, ax1, X_2d_km, np.array(all_scatter_labels), all_scatter_gsms, sf, plot_key="kmeans")
             self._embed_plot(fig, sf, "kmeans")
 
             # Stats summary
@@ -6714,7 +6984,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             plt.subplots_adjust(left=0.08, right=0.72, top=0.92, bottom=0.08)
             if dpc_scatter_x:
                 X_2d_dpc = np.column_stack([dpc_scatter_x, dpc_scatter_y])
-                self._add_rect_selector(fig, ax, X_2d_dpc, np.array(dpc_scatter_labels), dpc_scatter_gsms, sf)
+                self._add_rect_selector(fig, ax, X_2d_dpc, np.array(dpc_scatter_labels), dpc_scatter_gsms, sf, plot_key="dpc")
             self._embed_plot(fig, sf, "dpc")
 
         except Exception as e:
@@ -6745,6 +7015,94 @@ class CompareDistributionsWindow(tk.Toplevel):
             fig.canvas.draw_idle()
         fig.canvas.mpl_connect('pick_event', on_pick)
 
+    # ------------------------------------------------------------------
+    # Sample Detail Popup — shows full metadata for a clicked point
+    # ------------------------------------------------------------------
+
+    def _open_sample_detail_popup(self, gsm_id, group_label=None,
+                                   expression_val=None):
+        """
+        Open a detail window showing all available metadata for one sample.
+
+        Searches full_dataset, gene data, and GSE context for the sample.
+        """
+        top = tk.Toplevel(self)
+        top.title(f"Sample Detail — {gsm_id}")
+        top.geometry("700x520")
+        top.transient(self)
+
+        # ── Header ──
+        hdr = ttk.Frame(top, padding=8)
+        hdr.pack(fill=tk.X)
+        ttk.Label(hdr, text=gsm_id, font=('Segoe UI', 16, 'bold')).pack(
+            side=tk.LEFT)
+        if group_label:
+            ttk.Label(hdr, text=f"  Group: {group_label}",
+                      font=('Segoe UI', 11), foreground='#555').pack(
+                side=tk.LEFT, padx=(12, 0))
+
+        ttk.Separator(top, orient='horizontal').pack(fill=tk.X, padx=8)
+
+        # ── Collect all metadata ──
+        detail_rows = []
+
+        # From full_dataset
+        if hasattr(self, 'full_dataset') and not self.full_dataset.empty:
+            gsm_col = 'GSM' if 'GSM' in self.full_dataset.columns else None
+            if gsm_col:
+                match = self.full_dataset[
+                    self.full_dataset[gsm_col].astype(str) == str(gsm_id)]
+                if not match.empty:
+                    row = match.iloc[0]
+                    for col in match.columns:
+                        val = row[col]
+                        if col == gsm_col:
+                            continue
+                        val_str = str(val) if pd.notna(val) else ''
+                        if val_str and val_str.lower() not in ('nan', 'none'):
+                            detail_rows.append((col, val_str))
+
+        if expression_val is not None:
+            detail_rows.insert(0, ("Expression (selected gene)",
+                                   f"{expression_val:.6f}"))
+
+        if not detail_rows:
+            detail_rows.append(("(no metadata found)", ""))
+
+        # ── Detail table ──
+        tv_frame = ttk.Frame(top, padding=8)
+        tv_frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('Field', 'Value')
+        tree = ttk.Treeview(tv_frame, columns=cols, show='headings',
+                             height=min(20, len(detail_rows)))
+        tree.heading('Field', text='Field')
+        tree.heading('Value', text='Value')
+        tree.column('Field', width=180, anchor=tk.W)
+        tree.column('Value', width=480, anchor=tk.W)
+
+        vsb = ttk.Scrollbar(tv_frame, orient='vertical', command=tree.yview)
+        tree.config(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(fill=tk.BOTH, expand=True)
+
+        for field, value in detail_rows:
+            tree.insert('', tk.END, values=(field, value[:500]))
+
+        # ── Buttons ──
+        btn_frame = ttk.Frame(top, padding=8)
+        btn_frame.pack(fill=tk.X)
+
+        def _copy_to_clipboard():
+            text = "\n".join(f"{f}: {v}" for f, v in detail_rows)
+            top.clipboard_clear()
+            top.clipboard_append(text)
+
+        ttk.Button(btn_frame, text="Copy to Clipboard",
+                   command=_copy_to_clipboard).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Close",
+                   command=top.destroy).pack(side=tk.RIGHT, padx=4)
+
     def _embed_plot(self, fig, parent, key):
         if key in self.canvases: self.canvases[key].get_tk_widget().destroy(); self.toolbars[key].destroy(); plt.close(self.figs[key])
         c = self.FigureCanvasTkAgg(fig, master=parent); c.draw()
@@ -6769,9 +7127,14 @@ class CompareDistributionsWindow(tk.Toplevel):
         for sf in scroll_frames:
             for w in sf.scrollable_frame.winfo_children(): w.destroy()
         if hasattr(self, 'stats_tree'): self.stats_tree.delete(*self.stats_tree.get_children())
-        if hasattr(self, 'plot_refs'): 
+        if hasattr(self, 'plot_refs'):
             for f in self.plot_refs.values(): plt.close(f)
         self.plot_refs = {}
+        # Clear linked brushing state
+        self._scatter_data.clear()
+        self._brush_highlights.clear()
+        self._brushed_gsms.clear()
+        self._selectors.clear()
 
     def _clear_user_data(self):
         self.user_defined_groups = {}; self.loaded_files_listbox.delete(0, tk.END); self.status_label.config(text="Cleared.")
@@ -9001,12 +9364,12 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             if detected:
                 self.enqueue_log(f"[LLM] OK Using model: {detected}")
             else:
-                self.enqueue_log("[LLM] [!] No compatible model found. Pull one: ollama pull gemma2:9b")
+                self.enqueue_log("[LLM] [!] No compatible model found. Pull one: ollama pull gemma4:e2b")
         except Exception as e:
             self.enqueue_log("[LLM] [!] Ollama service not detected")
             self.enqueue_log("[LLM] LLM extraction will be unavailable")
             self.enqueue_log("[LLM] To enable: Install Ollama from https://ollama.com")
-            self.enqueue_log(f"[LLM] Then pull a model: ollama pull gemma2:9b")
+            self.enqueue_log(f"[LLM] Then pull a model: ollama pull gemma4:e2b")
             self.ai_pipeline = None
     
     def on_closing(self):
@@ -10882,7 +11245,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
         info_text = (
             "Phase 1 — Raw LLM Extraction (always runs)\n"
-            "  Each sample classified by gemma2:9b → Condition, Tissue, Age, Treatment, Treatment_Time.\n"
+            "  Each sample classified by gemma4:e2b → Condition, Tissue, Age, Treatment, Treatment_Time.\n"
             "  VRAM-aware parallel workers. RAW output — no .title(), no synonym dictionaries.\n\n"
             "Phase 1.5 — Per-GSE Label Collapsing (always runs)\n"
             "  Within each experiment (GSE) only. Two strict rules:\n"
@@ -11878,7 +12241,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         mode_desc = ttk.Frame(main)
         mode_desc.pack(fill=tk.X, padx=10, pady=(0, 4))
         mode_info = tk.Label(mode_desc,
-            text="Phase 1: Raw LLM extraction (Tissue, Condition, Treatment via gemma2:9b).\n"
+            text="Phase 1: Raw LLM extraction (Tissue, Condition, Treatment via gemma4:e2b).\n"
                  "         Age/Treatment_Time: regex parsers (no LLM needed).\n"
                  "Phase 1.5: ReAct collapse agent — normalises labels against accumulated vocabulary.\n"
                  "Phase 2: GSE context rescue — uses sibling labels to resolve remaining NS fields.\n"

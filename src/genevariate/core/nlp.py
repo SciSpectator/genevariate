@@ -58,14 +58,14 @@ Age: [e.g. "25 years" or blank]
 Time: [e.g. "24h" or blank]
 Dosage: [e.g. "10mg" or blank]"""
 
-        model = CONFIG.get('ai', {}).get('model', 'gemma2:9b')
+        model = CONFIG.get('ai', {}).get('model', 'gemma4:e2b')
 
-        # Safe Ollama call with response validation
+        # Safe Ollama call with response validation (think=false for gemma4 speed)
         try:
             response = ollama.chat(
                 model=model,
                 messages=[{'role': 'user', 'content': prompt}],
-                options={'temperature': 0.1, 'num_predict': 150},
+                options={'temperature': 0.0, 'num_predict': 60, 'num_ctx': 512},
             )
         except Exception as ollama_err:
             print(f"Ollama call failed for {gsm_id}: {ollama_err}")

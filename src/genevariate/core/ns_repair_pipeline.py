@@ -854,7 +854,9 @@ def _dispatch_gse_workers(df: pd.DataFrame,
                           log_fn=print,
                           progress_fn=None,
                           q=None,
-                          throttle_sem=None) -> Dict[str, int]:
+                          throttle_sem=None,
+                          enable_phase15: bool = True,
+                          enable_phase2: bool = True) -> Dict[str, int]:
     """
     Dispatch parallel GSE workers with semaphore-based concurrency.
 
@@ -944,6 +946,8 @@ def _dispatch_gse_workers(df: pd.DataFrame,
                 platform=platform_id,
                 ollama_url=ollama_url,
                 watchdog=watchdog,
+                enable_phase15=enable_phase15,
+                enable_phase2=enable_phase2,
             )
 
             for gsm in gsms:
@@ -1149,12 +1153,14 @@ def pipeline(config: dict, q=None):
             platforms       : List of GPL IDs to process (repair mode)
             gsm_file        : Path to GSM list file (scratch mode)
             platform_id     : Platform ID for scratch mode
-            model           : Ollama model name (default: gemma2:9b)
+            model           : Ollama model name (default: gemma4:e2b)
             ollama_url      : Ollama server URL
             geo_db_path     : Path to GEOmetadb.sqlite(.gz)
             memory_dir      : Path to LLM memory dir (cluster .txt files)
             max_workers     : Override parallel worker count (0 = auto)
             enable_phase1   : Run Phase 1 extraction (scratch only)
+            enable_phase15  : Run Phase 1.5 deterministic collapse (default True)
+            enable_phase2   : Run Phase 2 biomedical DB collapse (default True)
             enable_watchdog : Run resource watchdog
             label_cols      : Override label columns to repair
 
@@ -1173,6 +1179,8 @@ def pipeline(config: dict, q=None):
     memory_dir = config.get("memory_dir", "")
     max_workers_override = config.get("max_workers", 0)
     enable_phase1 = config.get("enable_phase1", True)
+    enable_phase15 = config.get("enable_phase15", True)
+    enable_phase2 = config.get("enable_phase2", True)
     enable_watchdog = config.get("enable_watchdog", True)
     label_cols = config.get("label_cols", None)
 
@@ -1186,6 +1194,8 @@ def pipeline(config: dict, q=None):
     log_fn(f"  GeneVariate NS Repair Pipeline")
     log_fn(f"  Mode: {mode} | Model: {model}")
     log_fn(f"  Fields: {', '.join(label_cols)}")
+    log_fn(f"  Phase 1.5: {'ON' if enable_phase15 else 'OFF'} | "
+           f"Phase 2 (biomedical DB): {'ON' if enable_phase2 else 'OFF'}")
     log_fn("=" * 60)
 
     # ── Validate inputs ──────────────────────────────────────────────────
@@ -1307,29 +1317,34 @@ def pipeline(config: dict, q=None):
         watchdog._target_parallel = total_workers
         watchdog.start()
         log_fn(f"  Watchdog started | {total_workers} fluid workers "
-               f"(scales {Watchdog.MIN_WORKERS}-{total_workers}) | "
-               f"scale down at CPU>{Watchdog.CPU_HIGH_PCT:.0f}% / "
-               f"RAM>{Watchdog.RAM_HIGH_PCT:.0f}%")
+               f"(scales {watchdog.MIN_WORKERS}-{total_workers}) | "
+               f"scale down at CPU>{watchdog.CPU_HIGH_PCT:.0f}% / "
+               f"RAM>{watchdog.RAM_HIGH_PCT:.0f}%")
 
-    # ── Build MemoryAgent ────────────────────────────────────────────────
+    # ── Build MemoryAgent (only when Phase 2 is enabled) ────────────────
 
-    _qprogress(q, 8, "Building memory agent...")
+    mem_agent = None
+    if enable_phase2:
+        _qprogress(q, 8, "Building memory agent...")
 
-    mem_db_path = os.path.join(output_dir, MEM_DB_NAME)
-    mem_agent = MemoryAgent(mem_db_path, ollama_url=ollama_url)
+        mem_db_path = os.path.join(output_dir, MEM_DB_NAME)
+        mem_agent = MemoryAgent(mem_db_path, ollama_url=ollama_url)
 
-    # Check if DB has clusters; if not, try loading from .txt files
-    ms = mem_agent.stats()
-    total_clusters = sum(ms.get("clusters", {}).values())
+        # Check if DB has clusters; if not, try loading from .txt files
+        ms = mem_agent.stats()
+        total_clusters = sum(ms.get("clusters", {}).values())
 
-    if total_clusters == 0 and memory_dir:
-        log_fn("  Memory DB empty -- importing from cluster files...")
-        mem_agent.build_from_clusters(memory_dir, log_fn=log_fn)
-    elif total_clusters > 0:
-        log_fn(f"  Memory DB loaded: {total_clusters} clusters")
-        mem_agent.load_cache_all(log_fn=log_fn)
+        if total_clusters == 0 and memory_dir:
+            log_fn("  Memory DB empty -- importing from cluster files...")
+            mem_agent.build_from_clusters(memory_dir, log_fn=log_fn)
+        elif total_clusters > 0:
+            log_fn(f"  Memory DB loaded: {total_clusters} clusters")
+            mem_agent.load_cache_all(log_fn=log_fn)
 
-    _qprogress(q, 12, "Memory agent ready")
+        _qprogress(q, 12, "Memory agent ready")
+    else:
+        log_fn("  Phase 2 OFF — skipping biomedical memory agent")
+        _qprogress(q, 12, "LLM-only mode (no biomedical DB)")
 
     # ── Load platform data ───────────────────────────────────────────────
 
@@ -1561,6 +1576,8 @@ def pipeline(config: dict, q=None):
                     f"{gpl}: repairing ({pct}%)"),
                 q=q,
                 throttle_sem=throttle_sem,
+                enable_phase15=enable_phase15,
+                enable_phase2=enable_phase2,
             )
 
             # Finalize flushers
