@@ -165,9 +165,9 @@ class GSEWorker:
         if ctx.title:
             lines.append(f"Experiment title  : {ctx.title}")
         if getattr(ctx, "summary", ""):
-            lines.append(f"Experiment summary: {ctx.summary[:500]}")
+            lines.append(f"Experiment summary: {ctx.summary}")
         if getattr(ctx, "design", ""):
-            lines.append(f"Overall design    : {ctx.design[:300]}")
+            lines.append(f"Overall design    : {ctx.design}")
         self._gse_block = "\n".join(lines) + "\n" if lines else ""
 
     # ------------------------------------------------------------------
@@ -182,23 +182,24 @@ class GSEWorker:
     # LLM call helpers
     # ------------------------------------------------------------------
 
-    def _llm(self, prompt: str, max_tokens: int = 200) -> str:
-        """Single-turn LLM call using the configured collapse model."""
+    def _llm(self, prompt: str, max_tokens: int = -1) -> str:
+        """Single-turn LLM call using the configured collapse model.
+        max_tokens=-1 means unlimited (Ollama convention)."""
         return self._llm_with_model(self.model, prompt, max_tokens)
 
     def _llm_with_model(
-        self, model: str, prompt: str, max_tokens: int = 60,
-        system: str = "", num_ctx: int = 512,
+        self, model: str, prompt: str, max_tokens: int = -1,
+        system: str = "", num_ctx: int = 32768,
     ) -> str:
         """
-        Single-turn LLM generation with think=false for gemma4:e2b speed.
+        Single-turn LLM generation with think=false for speed.
 
-        Uses HTTP API directly with think=False to disable gemma4's internal
+        Uses HTTP API directly with think=False to disable internal
         reasoning chain (~50x speedup, no accuracy loss). Falls back gracefully
         for models that don't support the think param.
 
-        num_ctx: context window size. Phase 1a/1b use 512 (fast, truncated).
-                 Phase 1c uses 4096 (full metadata, no truncation).
+        max_tokens=-1 : unlimited output (no truncation of LLM response)
+        num_ctx=32768 : large context window, fits full GEO metadata + GSE context
         """
         if self.watchdog:
             self.watchdog.wait_if_paused()
@@ -251,7 +252,7 @@ class GSEWorker:
         return ""
 
     def _llm_chat(
-        self, messages: List[dict], max_tokens: int = 60
+        self, messages: List[dict], max_tokens: int = -1
     ) -> str:
         """
         Multi-turn chat LLM call with think=false (used by the ReAct collapse agent).
@@ -276,7 +277,7 @@ class GSEWorker:
                     "options": {
                         "temperature": 0.0,
                         "num_predict": max_tokens,
-                        "num_ctx": 512,
+                        "num_ctx": 32768,
                     },
                 }
                 r = sess.post(f"{url}/api/chat", json=payload, timeout=30)
@@ -430,7 +431,7 @@ class GSEWorker:
         ]
 
         for turn in range(self.MAX_REACT_TURNS):
-            response = self._llm_chat(messages, max_tokens=150)
+            response = self._llm_chat(messages, max_tokens=-1)
             if not response:
                 break
             messages.append({"role": "assistant", "content": response})
@@ -625,9 +626,10 @@ class GSEWorker:
 
         # ── Step 1a: Per-label raw extraction with independent agents (gemma4:e2b) ──
 
-        title_str = str(raw.get("gsm_title", raw.get("title", "")))[:80]
-        source_str = str(raw.get("source_name", raw.get("source_name_ch1", "")))[:60]
-        chars_str = str(raw.get("characteristics", raw.get("characteristics_ch1", "")))[:250]
+        # NO truncation — send full metadata to the LLM (large num_ctx handles it)
+        title_str = str(raw.get("gsm_title", raw.get("title", "")))
+        source_str = str(raw.get("source_name", raw.get("source_name_ch1", "")))
+        chars_str = str(raw.get("characteristics", raw.get("characteristics_ch1", "")))
 
         def _extract_one_label(col: str) -> Tuple[str, str]:
             """Extract a single label using its dedicated prompt."""
@@ -639,7 +641,7 @@ class GSEWorker:
                 .replace("{SOURCE}", source_str)
                 .replace("{CHAR}", chars_str))
             for _attempt in range(3):
-                text = self._llm_with_model(self.EXTRACT_MODEL, prompt, max_tokens=60)
+                text = self._llm_with_model(self.EXTRACT_MODEL, prompt, max_tokens=-1)
                 if text:
                     # Clean the response — strip prefixes, quotes, etc.
                     text = re.sub(r'^(tissue|condition|treatment)\s*:\s*', '', text,
@@ -667,8 +669,9 @@ class GSEWorker:
         still_ns = [c for c in ns_cols if is_ns(result.get(c, NS))]
         if still_ns and self._gse_block:
             gse_title = self.ctx.title or ""
-            gse_summary = (getattr(self.ctx, "summary", "") or "")[:500]
-            gse_design = (getattr(self.ctx, "design", "") or "")[:300]
+            # NO truncation — full GSE context goes to the model
+            gse_summary = getattr(self.ctx, "summary", "") or ""
+            gse_design = getattr(self.ctx, "design", "") or ""
 
             def _infer_one_label(col: str) -> Tuple[str, str]:
                 """Infer a single NS label using GSE context as system prompt."""
@@ -683,7 +686,7 @@ class GSEWorker:
                           f"Source: {source_str}\n"
                           f"Characteristics: {chars_str}")
                 text = self._llm_with_model(
-                    self.EXTRACT_MODEL, prompt, max_tokens=60, system=system)
+                    self.EXTRACT_MODEL, prompt, max_tokens=-1, system=system)
                 if text:
                     text = re.sub(r'^(tissue|condition|treatment)\s*:\s*', '', text,
                                   flags=re.IGNORECASE).strip().strip('"').strip("'")
@@ -735,7 +738,7 @@ class GSEWorker:
                 _gse_ctx += f"Design: {self.ctx.design}\n"
 
             def _p1c_extract(col: str) -> Tuple[str, str]:
-                """Phase 1c: full-metadata extraction, NO char limits, num_ctx=4096."""
+                """Phase 1c: full-metadata extraction, NO char limits, num_ctx=32768."""
                 sys_prompt = PER_LABEL_SYSTEM_PROMPTS.get(col, "")
                 if not sys_prompt:
                     return col, NS
@@ -755,8 +758,8 @@ class GSEWorker:
                 for _attempt in range(3):
                     text = self._llm_with_model(
                         self.EXTRACT_MODEL, user,
-                        max_tokens=60, system=sys_prompt,
-                        num_ctx=4096)
+                        max_tokens=-1, system=sys_prompt,
+                        num_ctx=32768)
                     if text:
                         answer = parse_single_label(text)
                         if answer and not is_ns(answer):
@@ -902,7 +905,7 @@ class GSEWorker:
                                   .replace("{CANDIDATES}", cand_str)
                                   .replace("{SIBLING_LABELS}", sib_str))
                         resp = self._llm_with_model(
-                            self.EXTRACT_MODEL, prompt, max_tokens=60)
+                            self.EXTRACT_MODEL, prompt, max_tokens=-1)
                         if resp:
                             resp = resp.strip().strip('"').strip("'")
                             # Accept only if it matches a known sibling

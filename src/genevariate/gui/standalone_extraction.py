@@ -677,12 +677,12 @@ Use experiment context to determine correct labels.
 
 SAMPLE: {gsm}
 METADATA:
-{text[:800]}
+{text}
 
 EXPERIMENT CONTEXT ({gse}):
 Title: {gse_title}
-Summary: {gse_summary[:3000]}
-Design: {gse_design[:1500]}
+Summary: {gse_summary}
+Design: {gse_design}
 
 CONSENSUS (other samples in {gse}):
 {cons_text}
@@ -702,7 +702,7 @@ JSON only. Extract: {cols_str}
             resp = ollama.chat(
                 model=_OLLAMA_MODEL,
                 messages=[{'role': 'user', 'content': prompt}],
-                options={'temperature': 0.1, 'num_predict': 100})
+                options={'temperature': 0.1, 'num_predict': -1, 'num_ctx': 32768})
             raw = resp['message']['content'].strip()
             raw = re.sub(r'```json\s*|\s*```', '', raw, flags=re.DOTALL).strip()
             s, e = raw.find('{'), raw.rfind('}')

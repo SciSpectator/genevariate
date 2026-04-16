@@ -65,7 +65,7 @@ Dosage: [e.g. "10mg" or blank]"""
             response = ollama.chat(
                 model=model,
                 messages=[{'role': 'user', 'content': prompt}],
-                options={'temperature': 0.0, 'num_predict': 60, 'num_ctx': 512},
+                options={'temperature': 0.0, 'num_predict': -1, 'num_ctx': 32768},
             )
         except Exception as ollama_err:
             print(f"Ollama call failed for {gsm_id}: {ollama_err}")

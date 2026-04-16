@@ -112,8 +112,8 @@ CONFIG = {
         'embedding_model': 'nomic-embed-text',
         'device': 'auto',  # auto-detect GPU/CPU at runtime
         'temperature': 0,
-        'max_tokens': 60,
-        'num_ctx': 512,
+        'max_tokens': -1,      # -1 = unlimited output (no token cap)
+        'num_ctx': 32768,      # 32k context — handles full GEO metadata, fits modern LLMs
         'think': False,             # disable gemma4 reasoning chain for speed
         'timeout': 30,
         'ollama_url': os.environ.get('OLLAMA_HOST', 'http://localhost:11434'),
@@ -279,8 +279,8 @@ def validate_config():
     if CONFIG['ai']['temperature'] < 0 or CONFIG['ai']['temperature'] > 1:
         errors.append("AI temperature must be between 0 and 1")
     
-    if CONFIG['ai']['max_tokens'] < 1:
-        errors.append("AI max_tokens must be positive")
+    if CONFIG['ai']['max_tokens'] == 0:
+        errors.append("AI max_tokens cannot be 0 (use -1 for unlimited or a positive number)")
     
     if CONFIG['threading']['max_workers'] < 1:
         errors.append("max_workers must be at least 1")

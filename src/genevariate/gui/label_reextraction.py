@@ -159,7 +159,8 @@ def call_ollama(prompt, model=MODEL, max_retries=MAX_RETRIES):
                     "stream": False,
                     "options": {
                         "temperature": 0.1,
-                        "num_predict": 200,
+                        "num_predict": -1,     # unlimited output
+                        "num_ctx": 32768,      # large context — full metadata
                         "top_p": 0.9,
                     }
                 },
@@ -196,10 +197,10 @@ Characteristics: {gsm_data.get('characteristics', 'N/A')}
         gse_design = gse_context.get("overall_design", "")
         gse_summary = gse_context.get("summary", "")
         
-        # Truncate long descriptions
-        desc_text = gse_desc[:800] if gse_desc else ""
-        design_text = gse_design[:400] if gse_design else ""
-        summary_text = gse_summary[:400] if gse_summary else ""
+        # NO truncation — send full GSE context to the LLM
+        desc_text = gse_desc or ""
+        design_text = gse_design or ""
+        summary_text = gse_summary or ""
         
         recall = f"""
 EXPERIMENT CONTEXT (from GSE context cache):
@@ -418,10 +419,7 @@ def fetch_gse_from_geo(gse_id):
             else:
                 result['overall_design'] = val
     
-    # Truncate
-    result['summary'] = result['summary'][:800]
-    result['overall_design'] = result['overall_design'][:500]
-    
+    # NO truncation — preserve full GSE metadata for downstream LLM use
     return result if result['title'] else None
 
 

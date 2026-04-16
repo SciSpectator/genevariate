@@ -277,7 +277,8 @@ def _scrape_one_gse(gse_id: str) -> Optional[dict]:
                 design = (design + " " + chunk).strip() if design else chunk
 
         if title or summary:
-            return {"title": title, "summary": summary[:2000], "design": design[:1000]}
+            # NO truncation — keep full summary/design for downstream LLM use
+            return {"title": title, "summary": summary, "design": design}
         return None
 
     except Exception:
@@ -696,9 +697,10 @@ def _phase1_scratch_extraction(df: pd.DataFrame,
 
         # Build prompt
         text = format_sample_for_extraction(raw)
-        title_val = raw.get("gsm_title", "")[:80]
-        source_val = raw.get("source_name", "")[:60]
-        chars_val = raw.get("characteristics", "")[:250]
+        # NO truncation — full metadata to LLM
+        title_val = raw.get("gsm_title", "")
+        source_val = raw.get("source_name", "")
+        chars_val = raw.get("characteristics", "")
 
         prompt = (EXTRACTION_PROMPT_TEMPLATE
                   .replace("{TITLE}", title_val)
@@ -712,7 +714,7 @@ def _phase1_scratch_extraction(df: pd.DataFrame,
                 resp = _ollama.chat(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    options={"temperature": 0.0, "num_predict": 200},
+                    options={"temperature": 0.0, "num_predict": -1, "num_ctx": 32768},
                     keep_alive=-1,
                 )
                 if hasattr(resp, "message") and hasattr(resp.message, "content"):
