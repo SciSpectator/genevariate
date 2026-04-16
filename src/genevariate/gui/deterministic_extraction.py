@@ -424,11 +424,12 @@ class GSEWorker:
         # Pre-build GSE description block
         lines = []
         if ctx.title: lines.append(f"Experiment title: {ctx.title}")
-        if ctx.summary: lines.append(f"Summary: {ctx.summary[:500]}")
-        if ctx.design: lines.append(f"Design: {ctx.design[:300]}")
+        if ctx.summary: lines.append(f"Summary: {ctx.summary}")
+        if ctx.design: lines.append(f"Design: {ctx.design}")
         self._gse_block = "\n".join(lines) + "\n" if lines else ""
 
-    def _llm(self, prompt, max_tokens=200):
+    def _llm(self, prompt, max_tokens=-1):
+        """max_tokens=-1 = unlimited output (no truncation)."""
         if not _HAS_OLLAMA: return ""
         # Try with configured URL (GPU or CPU)
         for attempt in range(1, 4):
@@ -436,7 +437,7 @@ class GSEWorker:
                 resp = _ollama_lib.chat(
                     model=self.model,
                     messages=[{"role":"user","content":prompt}],
-                    options={"temperature":0.0,"num_predict":max_tokens},
+                    options={"temperature":0.0,"num_predict":max_tokens,"num_ctx":32768},
                     keep_alive=-1)
                 if hasattr(resp,'message') and hasattr(resp.message,'content'):
                     return (resp.message.content or "").strip()
@@ -460,13 +461,14 @@ class GSEWorker:
                 if attempt == 3: return ""
         return ""
 
-    def _llm_chat(self, messages, max_tokens=200):
+    def _llm_chat(self, messages, max_tokens=-1):
+        """max_tokens=-1 = unlimited output (no truncation)."""
         if not _HAS_OLLAMA: return ""
         for attempt in range(1, 4):
             try:
                 resp = _ollama_lib.chat(
                     model=self.model, messages=messages,
-                    options={"temperature":0.0,"num_predict":max_tokens,"num_ctx":4096},
+                    options={"temperature":0.0,"num_predict":max_tokens,"num_ctx":32768},
                     keep_alive=-1)
                 if hasattr(resp,'message') and hasattr(resp.message,'content'):
                     return (resp.message.content or "").strip()
@@ -491,9 +493,10 @@ class GSEWorker:
 
     def _extract_raw(self, gsm_row):
         """Phase 1: Extract all fields from raw metadata via LLM."""
-        title = str(gsm_row.get('title','') or '')[:80]
-        source = str(gsm_row.get('source_name_ch1','') or '')[:80]
-        chars = str(gsm_row.get('characteristics_ch1','') or '').replace('\t',' ')[:300]
+        # NO truncation — full metadata to LLM (num_ctx=32768 handles it)
+        title = str(gsm_row.get('title','') or '')
+        source = str(gsm_row.get('source_name_ch1','') or '')
+        chars = str(gsm_row.get('characteristics_ch1','') or '').replace('\t',' ')
 
         prompt = (_EXTRACTION_PROMPT
             .replace("{TITLE}", title)
@@ -501,7 +504,7 @@ class GSEWorker:
             .replace("{CHAR}", chars))
 
         for attempt in range(3):
-            raw_text = self._llm(prompt, max_tokens=200)
+            raw_text = self._llm(prompt, max_tokens=-1)
             if raw_text: break
             time.sleep(3 * (attempt + 1))
 
@@ -563,7 +566,7 @@ class GSEWorker:
             f"3. Format: THOUGHT: <reason>\\nACTION: SEARCH/PICK: <value>\n"
         )
 
-        title = str(gsm_row.get('title','') or '')[:60] if gsm_row else ""
+        title = str(gsm_row.get('title','') or '') if gsm_row else ""
         context = (
             f"EXPERIMENT:\n{gse_ctx_text}\n"
             f"{epi_text}\n"
@@ -579,7 +582,7 @@ class GSEWorker:
         ]
 
         for turn in range(MAX_TURNS):
-            response = self._llm_chat(messages, max_tokens=120)
+            response = self._llm_chat(messages, max_tokens=-1)
             if not response: break
             messages.append({"role":"assistant","content":response})
 
@@ -719,12 +722,12 @@ class GSEWorker:
                 f"{self._gse_block}\n"
                 f"{col} labels in this experiment:\n{sibling_text}\n\n"
                 f"Sample {gsm_id}: "
-                f"Title: {str(gsm_row.get('title',''))[:60]}\n"
-                f"Source: {str(gsm_row.get('source_name_ch1',''))[:60]}\n\n"
+                f"Title: {str(gsm_row.get('title',''))}\n"
+                f"Source: {str(gsm_row.get('source_name_ch1',''))}\n\n"
                 f"What is the {col} for this sample? Match sibling labels if appropriate.\n"
                 f"If not clear: Not Specified\n\n{col}:"
             )
-            llm_out = self._llm(p2, max_tokens=60)
+            llm_out = self._llm(p2, max_tokens=-1)
             if llm_out:
                 val = llm_out.split('\n')[0].strip().strip('"').strip("'")
                 val = re.sub(rf"^{col}\s*:\s*","",val,flags=re.I).strip()

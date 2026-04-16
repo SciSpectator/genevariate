@@ -568,7 +568,7 @@ class SampleClassificationAgent:
             if _OLLAMA_EXTRACTION_MODEL:
                 ollama.chat(model=_OLLAMA_EXTRACTION_MODEL,
                             messages=[{"role": "user", "content": "1"}],
-                            options={"num_predict": 1, "num_ctx": 512},
+                            options={"num_predict": 1, "num_ctx": 32768},
                             keep_alive=-1)
                 self.log(f"[Agent] {_OLLAMA_EXTRACTION_MODEL} preloaded into VRAM")
         except Exception as e:
@@ -2524,8 +2524,8 @@ def _classify_sample_llm(gsm_row, fields=None, custom_fields=None):
     for attempt in range(2):
         try:
             raw = _ollama_post(user_msg, model=_OLLAMA_EXTRACTION_MODEL,
-                               num_predict=200, system_prompt=system,
-                               timeout=120)
+                               num_predict=-1, num_ctx=32768,
+                               system_prompt=system, timeout=120)
             if not raw:
                 if attempt == 0: continue
                 return {'gsm': gsm_id, **{f: 'Not Specified' for f in fields}}

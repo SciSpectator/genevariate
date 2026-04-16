@@ -438,9 +438,11 @@ def parse_combined(text: str, ns_cols: List[str]) -> Dict[str, str]:
 
 # ── Text utilities ──
 
-def sanitize(text, max_chars: int = 400) -> str:
+def sanitize(text, max_chars: int = -1) -> str:
+    """Clean control chars; max_chars=-1 means no truncation."""
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ', str(text or ""))
-    return text.replace('\r', ' ').strip()[:max_chars]
+    text = text.replace('\r', ' ').strip()
+    return text if max_chars < 0 else text[:max_chars]
 
 
 def clean_output(text: str) -> str:
@@ -490,10 +492,11 @@ def format_sample_for_extraction(raw: dict) -> str:
     """Format raw GEO metadata as compact input for extraction model."""
     def _s(v):
         return str(v).strip().replace("\t", " ").replace("\n", " ") if v else ""
-    title = _s(raw.get("gsm_title", ""))[:80]
-    source = _s(raw.get("source_name", ""))[:60]
-    char = _s(raw.get("characteristics", ""))[:250]
-    treat = _s(raw.get("treatment_protocol", ""))[:80]
+    # NO truncation — full metadata goes to the LLM
+    title = _s(raw.get("gsm_title", ""))
+    source = _s(raw.get("source_name", ""))
+    char = _s(raw.get("characteristics", ""))
+    treat = _s(raw.get("treatment_protocol", ""))
     parts = []
     if title:
         parts.append(f"title:{title}")
@@ -543,9 +546,9 @@ def prompt_extract_with_gse(gsm: str, col: str, raw: dict,
     if ctx.title:
         gse_hint += f"Experiment title  : {ctx.title}\n"
     if getattr(ctx, "summary", ""):
-        gse_hint += f"Experiment summary: {ctx.summary[:400]}\n"
+        gse_hint += f"Experiment summary: {ctx.summary}\n"
     if getattr(ctx, "design", ""):
-        gse_hint += f"Overall design    : {ctx.design[:200]}\n"
+        gse_hint += f"Overall design    : {ctx.design}\n"
     if gse_hint:
         gse_hint += "\n"
 
