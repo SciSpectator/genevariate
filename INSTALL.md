@@ -24,9 +24,8 @@ pip install -e .
 curl -fsSL https://ollama.com/install.sh | sh   # Linux/macOS
 # Windows: download from https://ollama.com/download
 
-# 5. Pull required models
-ollama pull gemma2:2b
-ollama pull gemma2:9b
+# 5. Pull required models (v2.1 uses a single unified model)
+ollama pull gemma4:e2b
 ollama pull nomic-embed-text
 
 # 6. Download GEOmetadb (if not pulled via Git LFS)
@@ -90,8 +89,9 @@ ollama --version
 ### Step 3: Install GeneVariate
 
 ```bash
-# Unzip the archive
-unzip GeneVariate_v2.0.zip
+# Clone the repo (or unzip a downloaded archive)
+git lfs install
+git clone https://github.com/SciSpectator/genevariate.git
 cd genevariate
 
 # Create and activate a virtual environment
@@ -114,10 +114,11 @@ GeneVariate uses three local LLM models:
 ollama serve &
 
 # Pull models (one-time download)
-ollama pull gemma2:2b          # ~1.5 GB — fast extraction
-ollama pull gemma2:9b          # ~5.4 GB — collapse reasoning
+ollama pull gemma4:e2b         # ~2 GB — unified extraction + collapse (32k context, unlimited output)
 ollama pull nomic-embed-text   # ~274 MB — semantic embeddings
 ```
+
+> **Upgrading from v2.0?** The older `gemma2:2b` + `gemma2:9b` split has been replaced by a single `gemma4:e2b` model. You can remove the old ones with `ollama rm gemma2:2b gemma2:9b` to free ~7 GB of disk space.
 
 ### Step 5: Download GEOmetadb
 
@@ -263,7 +264,7 @@ On machines without a GPU or with limited RAM:
 - All features work -- inference runs on CPU (slower but functional)
 - Worker count is auto-calculated based on available RAM
 - GEOmetadb is queried from disk with SQLite WAL mode, indexes, and mmap
-- The `gemma2:2b` model runs on 4 GB RAM with CPU
+- The `gemma4:e2b` model runs on 4 GB RAM with CPU
 
 ---
 
@@ -297,16 +298,13 @@ curl http://localhost:11434/api/tags
 # If not, start it:
 ollama serve &
 # Then pull:
-ollama pull gemma2:2b
+ollama pull gemma4:e2b
 ```
 
 ### Out of Memory (OOM)
 - GeneVariate auto-detects your RAM and adapts (4 GB devices use disk-based DB, fewer workers)
 - The watchdog automatically scales down workers on memory pressure
-- On very low-RAM systems (< 4 GB), use `gemma2:2b` only by editing `config.py`:
-  ```python
-  'model': 'gemma2:2b',
-  ```
+- On very low-RAM systems (< 4 GB), keep the default `gemma4:e2b` (it is already memory-efficient) — no config change needed.
 
 ### Permission errors on Linux
 ```bash
