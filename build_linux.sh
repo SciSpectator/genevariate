@@ -36,7 +36,7 @@ if [ -d "$DIST_DIR" ]; then
 
     cat > "$DESKTOP_FILE" << DESKTOP
 [Desktop Entry]
-Version=2.1
+Version=1.0
 Type=Application
 Name=GeneVariate
 Comment=Gene Expression Variability Analysis Platform

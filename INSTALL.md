@@ -24,7 +24,7 @@ pip install -e .
 curl -fsSL https://ollama.com/install.sh | sh   # Linux/macOS
 # Windows: download from https://ollama.com/download
 
-# 5. Pull required models (v2.1 uses a single unified model)
+# 5. Pull required models (single unified model)
 ollama pull gemma4:e2b
 ollama pull nomic-embed-text
 
@@ -118,7 +118,6 @@ ollama pull gemma4:e2b         # ~2 GB — unified extraction + collapse (32k co
 ollama pull nomic-embed-text   # ~274 MB — semantic embeddings
 ```
 
-> **Upgrading from v2.0?** The older `gemma2:2b` + `gemma2:9b` split has been replaced by a single `gemma4:e2b` model. You can remove the old ones with `ollama rm gemma2:2b gemma2:9b` to free ~7 GB of disk space.
 
 ### Step 5: Download GEOmetadb
 
