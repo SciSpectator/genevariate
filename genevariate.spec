@@ -122,8 +122,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "GeneVariate",
             "CFBundleDisplayName": "GeneVariate",
-            "CFBundleVersion": "2.1.0",
-            "CFBundleShortVersionString": "2.1.0",
+            "CFBundleVersion": "1.0.0",
+            "CFBundleShortVersionString": "1.0.0",
             "NSHighResolutionCapable": True,
         },
     )

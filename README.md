@@ -1,7 +1,7 @@
 <p align="center">
   <img src="docs/logo.png" alt="GeneVariate Logo" width="300">
   <br><br>
-  <img src="https://img.shields.io/badge/GeneVariate-v2.0-blueviolet?style=for-the-badge" alt="GeneVariate v2.0">
+  <img src="https://img.shields.io/badge/GeneVariate-v1.0-blueviolet?style=for-the-badge" alt="GeneVariate v1.0">
   <br><br>
   <strong>GeneVariate</strong><br>
   <em>Gene Expression Variability Analysis Platform with AI-powered biological metadata extraction</em>
@@ -246,7 +246,7 @@ This runs PyInstaller → produces `dist/GeneVariate.app` with `icon.icns` embed
 ```bash
 create-dmg --volname "GeneVariate" --window-size 540 380 \
   --icon-size 128 --app-drop-link 380 180 \
-  GeneVariate-2.1.0.dmg dist/GeneVariate.app
+  GeneVariate-1.0.0.dmg dist/GeneVariate.app
 ```
 
 ---
@@ -318,7 +318,7 @@ ollama pull gemma4:e2b        # Primary extraction + collapse model (~2 GB)
 ollama pull nomic-embed-text  # Semantic embeddings (~274 MB)
 ```
 
-> **Note (v2.1):** The pipeline now uses `gemma4:e2b` as a single unified model with a **32k-token context window** and **unlimited output tokens** — no more `gemma2:9b` + `gemma2:2b` split. Older v2.0 install instructions that mention `gemma2` are deprecated.
+> **Note:** GeneVariate uses `gemma4:e2b` as a single unified model with a **32k-token context window** and **unlimited output tokens** — one small model handles both extraction and collapse reasoning.
 
 ---
 

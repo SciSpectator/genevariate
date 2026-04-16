@@ -8682,7 +8682,7 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("GeneVariate 2.1 - Gene Expression Analysis Platform")
+        self.title("GeneVariate 1.0 - Gene Expression Analysis Platform")
         self.geometry("1200x1050")
         try:
             _sw, _sh = self.winfo_screenwidth(), self.winfo_screenheight()

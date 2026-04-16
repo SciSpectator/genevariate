@@ -83,7 +83,7 @@ def install_linux():
         exec_cmd = f"{sys.executable} -m genevariate.main"
 
     desktop_entry = f"""[Desktop Entry]
-Version=2.1
+Version=1.0
 Type=Application
 Name={APP_NAME}
 Comment=Gene Expression Variability Analysis Platform
