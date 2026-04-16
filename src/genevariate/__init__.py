@@ -8,7 +8,7 @@ The GUI (tkinter/matplotlib/seaborn) is loaded lazily on first access so that
 headless extraction workloads never pay the GUI import cost.
 """
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 __author__ = 'GeneVariate Development Team'
 
 from .config import CONFIG

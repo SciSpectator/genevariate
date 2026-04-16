@@ -1,9 +1,13 @@
 """
 Extraction - LLM prompt templates, parsers, and deterministic collapse.
 
+Aligned with upstream LLM-Label-Extractor v2.2 (multi-value extraction
+with semicolons, coded-value disambiguation for Condition/Treatment,
+per-label agents, KV-cached system prompts for Phase 1c).
+
 Contains:
     - Extraction prompt templates for raw GEO metadata
-    - JSON response parsers
+    - JSON response parsers (semicolon-aware multi-value)
     - Phase 1.5 deterministic GSE-scoped label collapsing
     - Text cleaning and NS detection utilities
 """
@@ -43,8 +47,9 @@ _TISSUE_EXTRACT_PROMPT = (
     "  - If a cell type is named, use the cell type (e.g. NK Cells not PBMC)\n"
     "  - Cancer/tumor tissue IS a valid tissue (e.g. 'breast tumor', 'colon carcinoma')\n"
     "  - 'whole blood', 'peripheral blood', 'liver', etc. ARE valid tissues\n"
+    "  - If MULTIPLE tissues/cell types apply → list ALL separated by semicolons\n"
     "  - If unknown or genuinely absent from ALL fields = Not Specified\n"
-    "  - Title Case. One answer only.\n"
+    "  - Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER (tissue/cell type/cell line only, nothing else):"
 )
@@ -68,12 +73,22 @@ _CONDITION_EXTRACT_PROMPT = (
     "  - Smoking status: 'smoking: 0' → Never Smoker, '1' → Former, '2' → Current\n"
     "  - Control / Healthy / Normal in a disease study = Control\n"
     "\n"
+    "IMPORTANT — GEO metadata often uses CODED values (0/1, Y/N, Yes/No, True/False)\n"
+    "to indicate presence or absence of a condition. The field NAME tells you WHAT\n"
+    "the condition is, and the VALUE tells you whether this sample HAS it or not.\n"
+    "  - Value indicates ABSENCE (0, N, No, None, negative, False, non-) → Control\n"
+    "  - Value indicates PRESENCE (1, Y, Yes, positive, True) → extract the condition\n"
+    "    name FROM THE FIELD NAME, not the coded value itself\n"
+    "  - Numeric scales (0/1/2/3) often encode severity or categories — read the field\n"
+    "    description to understand what each number means\n"
+    "\n"
     "RULES:\n"
     "  - Read the ENTIRE metadata — do NOT skip any field\n"
     "  - Copy the MOST SPECIFIC condition name present\n"
     "  - If sample is healthy/control/normal in a disease study = Control\n"
+    "  - If MULTIPLE conditions apply → list ALL separated by semicolons\n"
     "  - If unknown or genuinely absent from ALL fields = Not Specified\n"
-    "  - Title Case. One answer only.\n"
+    "  - Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER (condition/disease/status only, nothing else):"
 )
@@ -103,10 +118,15 @@ _TREATMENT_EXTRACT_PROMPT = (
     "  - Lab protocols (Illumina, TRIzol, RNA extraction, FFPE)\n"
     "  - Sample IDs, batch codes, patient identifiers\n"
     "\n"
+    "IMPORTANT — coded values (0/1, Y/N, None) in treatment fields indicate\n"
+    "presence or absence. If the value means NO treatment was applied → Not Specified.\n"
+    "If the value means treatment WAS applied → extract the treatment name from context.\n"
+    "\n"
     "RULES:\n"
     "  - Read the ENTIRE metadata — do NOT skip any field\n"
     "  - If no drug/compound/exposure was applied → Not Specified\n"
-    "  - Title Case. One answer only.\n"
+    "  - If MULTIPLE treatments apply → list ALL separated by semicolons\n"
+    "  - Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER (treatment/drug/intervention only, nothing else):"
 )
@@ -125,7 +145,8 @@ _TISSUE_INFER_SYSTEM = (
     "EXPERIMENT DESIGN: {GSE_DESIGN}\n\n"
     "Based on this experiment context, INFER the tissue or cell type.\n"
     "If the experiment uses a specific tissue, this sample is from that tissue.\n"
-    "Be specific. Unknown = Not Specified. One answer only."
+    "Be specific. Unknown = Not Specified.\n"
+    "If MULTIPLE tissues/cell types → list ALL separated by semicolons."
 )
 _CONDITION_INFER_SYSTEM = (
     "You are a disease/condition annotator. This sample is part of "
@@ -136,7 +157,8 @@ _CONDITION_INFER_SYSTEM = (
     "Based on this experiment context, INFER the disease or condition.\n"
     "If the experiment studies a disease, this sample has that condition.\n"
     "Control/healthy in disease study = Control.\n"
-    "Be specific. Unknown = Not Specified. One answer only."
+    "Be specific. Unknown = Not Specified.\n"
+    "If MULTIPLE conditions → list ALL separated by semicolons."
 )
 _TREATMENT_INFER_SYSTEM = (
     "You are a treatment/drug annotator. This sample is part of "
@@ -151,7 +173,7 @@ _TREATMENT_INFER_SYSTEM = (
     "'Control' or 'Normal' = NOT a treatment.\n"
     "Observational disease-vs-control studies have NO treatment → Not Specified.\n"
     "Vehicle/DMSO/PBS alone = Untreated. No drug applied = Not Specified.\n"
-    "One answer only."
+    "If MULTIPLE treatments → list ALL separated by semicolons."
 )
 PER_LABEL_INFER_SYSTEMS = {
     "Tissue":    _TISSUE_INFER_SYSTEM,
@@ -304,36 +326,62 @@ EXTRACT_USER_TEMPLATE = (
     "Characteristics: {CHAR}"
 )
 
+_NS_TOKENS = ('none', 'null', '', 'not specified', 'n/a', 'unknown', 'na')
+
+
+def _clean_value(v: str) -> str:
+    """Strip wrapping punctuation and surrounding whitespace from a single value."""
+    return str(v).strip().strip('"').strip("'").rstrip('.').strip()
+
+
 def parse_single_label(text: str) -> str:
-    """Parse a single label from a per-label LLM agent response.
-    The agent outputs just one label (no JSON), so we clean it up.
+    """Parse label(s) from a per-label LLM agent response.
+
+    Aligned with upstream LLM-Label-Extractor v2.2: supports MULTIPLE values
+    separated by semicolons. Each value is cleaned individually and the
+    deduplicated list is rejoined with '; '. NS sentinels are dropped.
     Falls back to JSON parsing if the response contains braces.
     """
     if not text:
         return NS
     text = text.strip()
-    # If response contains JSON, extract the value
+    # If response contains JSON, extract the value(s)
     if '{' in text:
         m = re.search(r'\{.*\}', text, re.DOTALL)
         if m:
             try:
                 data = json.loads(m.group(0))
+                vals = []
                 for v in data.values():
-                    v = str(v).strip()
-                    if v and v.lower() not in ('none', 'null', '', 'not specified',
-                                                'n/a', 'unknown'):
-                        return v
+                    v = _clean_value(v)
+                    if v and v.lower() not in _NS_TOKENS:
+                        # JSON values themselves may contain semicolons
+                        for piece in v.split(';'):
+                            piece = _clean_value(piece)
+                            if piece and piece.lower() not in _NS_TOKENS \
+                                    and piece not in vals:
+                                vals.append(piece)
+                if vals:
+                    return '; '.join(vals)
             except Exception:
                 pass
-    # Plain text response — take first non-empty line
+    # Plain text response — take the first non-empty answer line
     for line in text.splitlines():
         line = line.strip().rstrip('.')
         if line.lower().startswith(('answer:', 'tissue:', 'condition:',
                                      'treatment:', 'note:', 'rules:')):
             line = line.split(':', 1)[1].strip() if ':' in line else ''
-        if line and line.lower() not in ('none', 'null', '', 'not specified',
-                                          'n/a', 'unknown'):
-            return line
+        if not line or line.lower() in _NS_TOKENS:
+            continue
+        # Multi-value support: split on ';' and dedupe while preserving order
+        pieces = [_clean_value(p) for p in line.split(';')]
+        pieces = [p for p in pieces if p and p.lower() not in _NS_TOKENS]
+        if pieces:
+            seen = []
+            for p in pieces:
+                if p not in seen:
+                    seen.append(p)
+            return '; '.join(seen)
     return NS
 
 
