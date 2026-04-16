@@ -11,8 +11,8 @@
   <a href="#-license"><img src="https://img.shields.io/badge/License-MIT-green.svg?logo=opensourceinitiative&logoColor=white" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Python-3.9%2B-blue.svg?logo=python&logoColor=white" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/Backend-Ollama-orange.svg?logo=ollama&logoColor=white" alt="Backend: Ollama">
-  <img src="https://img.shields.io/badge/Model-gemma2%3A9b-ff6f00?logo=google&logoColor=white" alt="Model: gemma2:9b">
-  <img src="https://img.shields.io/badge/Model-gemma2%3A2b-ff8f00?logo=google&logoColor=white" alt="Model: gemma2:2b">
+  <img src="https://img.shields.io/badge/Model-gemma4%3Ae2b-ff6f00?logo=google&logoColor=white" alt="Model: gemma4:e2b">
+  <img src="https://img.shields.io/badge/Context-32k%20tokens-1565C0?logo=ollama&logoColor=white" alt="Context: 32k">
   <img src="https://img.shields.io/badge/Status-Stable-brightgreen.svg" alt="Status: Stable">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/GUI-tkinter-4B8BBE.svg" alt="GUI: tkinter">
@@ -35,7 +35,7 @@ All inference runs locally on your hardware -- no API keys, no cloud, no data le
 | | Feature | Description |
 |---|---|---|
 | :brain: | **4-Tier Memory System** | Cluster map (O(1) lookup), semantic embeddings (cosine RAG), episodic log, knowledge graph -- all SQLite-backed with WAL journaling |
-| :robot: | **Multi-Phase AI Pipeline** | Phase 1 (gemma2:2b fast extraction), Phase 1.5 (deterministic collapse), Phase 2 (gemma2:9b ReAct agent) |
+| :robot: | **Multi-Phase AI Pipeline** | Phase 1 (raw), 1.5 (deterministic collapse), 1c (full-metadata re-extraction), 2 (ReAct collapse agent) — all powered by `gemma4:e2b` with 32k context and **unlimited output tokens** |
 | :bar_chart: | **Distribution Analysis** | Classify gene expression into 8 distribution types: normal, lognormal, bimodal, heavy-tailed, uniform, skewed, mixed |
 | :microscope: | **Statistical Comparisons** | Wilcoxon rank-sum, Student's t-test (Welch), Wasserstein distance, Cohen's d, Cliff's delta |
 | :desktop_computer: | **Interactive GUI** | Full Tkinter interface with PCA, histograms, region analysis, group comparison, and live resource monitoring |
@@ -103,9 +103,9 @@ The pipeline uses **autonomous GSEWorker agents** where each GEO experiment is h
 2. **GSE Queue Build** -- For each platform, all associated GSE experiments and their GSM samples are queued for processing.
 
 3. **Phase 1: Extract** -- Worker agents spawned in parallel (4--210 concurrent). Each agent:
-   - Reads GSM sample title, characteristics, and description
-   - Reads parent GSE experiment summary for context
-   - Sends structured prompt to `gemma2:2b` via Ollama
+   - Reads full GSM sample title, characteristics, and description (**no truncation**)
+   - Reads full parent GSE experiment summary + overall design for context
+   - Sends structured prompt to `gemma4:e2b` via Ollama with `num_ctx=32768` and `num_predict=-1` (unlimited output)
    - Extracts verbatim **Tissue**, **Condition**, and **Treatment** labels
    - Marks insufficient information as `Not Specified`
    - Checkpoints every 200 samples
@@ -115,7 +115,7 @@ The pipeline uses **autonomous GSEWorker agents** where each GEO experiment is h
    - Abbreviation matching with numeric guards
    - Dominant sibling label rescue via GSEContext
 
-5. **Phase 2: ReAct Collapse Agent** -- Remaining NS labels processed by `gemma2:9b`:
+5. **Phase 2: ReAct Collapse Agent** -- Remaining NS labels processed by `gemma4:e2b` with the full 32k context:
    - Check episodic memory for cached resolution
    - Embed label via nomic-embed-text, cosine search against cluster vocabulary
    - ReAct agent with 3 tools: SEARCH, PICK, NEW_CLUSTER
@@ -150,89 +150,191 @@ The pipeline uses **autonomous GSEWorker agents** where each GEO experiment is h
 
 ---
 
-## :gear: Installation & Setup
+## :gear: Installation
 
-### Prerequisites
+There are **three ways** to install GeneVariate. Pick the one that matches your platform:
 
-- **Python 3.9+**
-- **Ollama** (local LLM runtime)
-- **Git LFS** (for GEOmetadb download)
+| Method | Platform | Best for | Requires terminal |
+|---|---|---|---|
+| **A. Pre-built installer** | Windows, macOS | End users — double-click to install | No |
+| **B. Source + `install.py`** | Windows, macOS, Linux | Users who want the latest code | Once, then desktop shortcut |
+| **C. Docker** | All | Servers / headless / reproducible builds | Yes |
 
-### 1. Clone the Repository
+> **Prerequisites common to all methods:** [Ollama](https://ollama.com) (local LLM runtime — installed separately, see per-OS sections below) and the GEOmetadb SQLite database (downloaded via Git LFS or direct URL — see [Downloading GEOmetadb](#downloading-geometadb)).
 
-```bash
+---
+
+### :window: Windows
+
+**Option 1 — Pre-built installer (recommended for end users)**
+
+1. Go to the [**Releases page**](https://github.com/SciSpectator/genevariate/releases/latest)
+2. Download `GeneVariate-Setup-x.y.z.exe`
+3. Double-click → Windows SmartScreen → **More info** → **Run anyway** (the installer is unsigned on purpose; source is public)
+4. The setup wizard walks you through:
+   - **License agreement** (MIT)
+   - **Install location** (default: `C:\Program Files\GeneVariate`)
+   - **Start Menu folder**
+   - **Desktop shortcut** checkbox
+5. Click **Install** → **Finish** → GeneVariate icon appears on your Desktop
+6. Install [Ollama for Windows](https://ollama.com/download/windows) and pull the models (see [step below](#install-ollama-models))
+
+**Option 2 — From source**
+
+```powershell
+# 1. Install Python 3.11 from python.org (tick "Add to PATH")
+# 2. Install Git LFS: https://git-lfs.com
+# 3. Clone the repo
 git lfs install
 git clone https://github.com/SciSpectator/genevariate.git
 cd genevariate
+
+# 4. Install the package + create Desktop shortcut with icon
+python install.py
+
+# 5. Install Ollama
+winget install Ollama.Ollama
+#   OR download: https://ollama.com/download/windows
 ```
 
-> **Note:** `git lfs install` is required to download the GEOmetadb database (~1.1 GB) tracked via Git LFS. If Git LFS is not available, see [Downloading GEOmetadb manually](#downloading-geometadb) below.
-
-### 2. Create a Virtual Environment (recommended)
-
-```bash
-python3 -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or: venv\Scripts\activate  # Windows
-```
-
-### 3. Install the Package
-
-```bash
-pip install -e .
-```
-
-Or install dependencies only:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Install System Dependencies
-
-#### Ubuntu / Debian
-
-```bash
-sudo apt update && sudo apt install -y python3-tk
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-#### Fedora
-
-```bash
-sudo dnf install python3-tkinter
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-#### macOS
-
-```bash
-brew install python-tk
-brew install ollama
-ollama serve &
-```
-
-#### Windows
+**Option 3 — Build the installer yourself**
 
 ```powershell
-winget install Ollama.Ollama
-# OR download from https://ollama.com/download/windows
-# tkinter is included with standard Python on Windows
+build_windows.bat
 ```
+This runs PyInstaller → produces `dist\GeneVariate\GeneVariate.exe` with the app icon embedded. Use [Inno Setup](https://jrsoftware.org/isinfo.php) to turn it into a full `Setup.exe` wizard.
 
-### 5. Pull Ollama Models
+---
+
+### :apple: macOS
+
+**Option 1 — Pre-built `.dmg` (recommended for end users)**
+
+1. Go to the [**Releases page**](https://github.com/SciSpectator/genevariate/releases/latest)
+2. Download `GeneVariate-x.y.z.dmg`
+3. Double-click the `.dmg` → drag **GeneVariate.app** to the **Applications** folder
+4. Launch from **Launchpad** or **Applications** (first launch: right-click → Open to bypass Gatekeeper, since the app is unsigned)
+5. Install Ollama: `brew install ollama` and run `ollama serve &`, then pull the models (see [step below](#install-ollama-models))
+
+**Option 2 — From source**
 
 ```bash
-ollama pull gemma2:9b          # Primary collapse model (~5.4 GB)
-ollama pull gemma2:2b          # Fast extraction model (~1.5 GB)
-ollama pull nomic-embed-text   # Semantic embeddings (~274 MB)
+# 1. Install Homebrew if you do not have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 2. Install Python + Tk + Git LFS + Ollama
+brew install python-tk@3.11 git-lfs ollama
+
+# 3. Start Ollama
+ollama serve &
+
+# 4. Clone the repo
+git lfs install
+git clone https://github.com/SciSpectator/genevariate.git
+cd genevariate
+
+# 5. Install GeneVariate + create Desktop launcher with icon
+python3 install.py
 ```
 
-### 6. Launch
+**Option 3 — Build your own `.app` + `.dmg`**
 
 ```bash
-genevariate                # GUI mode
-genevariate --ns-repair    # NS Repair pipeline (headless)
+./build_mac.sh
+```
+This runs PyInstaller → produces `dist/GeneVariate.app` with `icon.icns` embedded. To package into a `.dmg` for distribution, install [`create-dmg`](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`) and run:
+```bash
+create-dmg --volname "GeneVariate" --window-size 540 380 \
+  --icon-size 128 --app-drop-link 380 180 \
+  GeneVariate-2.1.0.dmg dist/GeneVariate.app
+```
+
+---
+
+### :penguin: Linux
+
+Linux users install from source — no installer wizard needed.
+
+**Ubuntu / Debian**
+
+```bash
+# 1. System dependencies
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip python3-tk git-lfs
+
+# 2. Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 3. Clone + install
+git lfs install
+git clone https://github.com/SciSpectator/genevariate.git
+cd genevariate
+python3 -m venv venv && source venv/bin/activate
+python3 install.py         # creates ~/.local/share/applications/genevariate.desktop + Desktop shortcut
+```
+
+**Fedora / RHEL**
+
+```bash
+sudo dnf install -y python3 python3-pip python3-tkinter git-lfs
+curl -fsSL https://ollama.com/install.sh | sh
+git lfs install
+git clone https://github.com/SciSpectator/genevariate.git
+cd genevariate
+python3 -m venv venv && source venv/bin/activate
+python3 install.py
+```
+
+**Arch / Manjaro**
+
+```bash
+sudo pacman -S python python-pip tk git-lfs
+# Install ollama from AUR or official
+curl -fsSL https://ollama.com/install.sh | sh
+git lfs install
+git clone https://github.com/SciSpectator/genevariate.git
+cd genevariate
+python3 -m venv venv && source venv/bin/activate
+python3 install.py
+```
+
+**Build a standalone binary (optional)**
+
+```bash
+./build_linux.sh
+```
+Produces `dist/GeneVariate/GeneVariate` (115 MB single-directory binary) + `GeneVariate.desktop` launcher. Run directly or register with:
+```bash
+cp dist/GeneVariate/GeneVariate.desktop ~/.local/share/applications/
+```
+
+---
+
+### Install Ollama Models
+
+After installing Ollama on **any** platform, pull the models GeneVariate needs:
+
+```bash
+ollama pull gemma4:e2b        # Primary extraction + collapse model (~2 GB)
+ollama pull nomic-embed-text  # Semantic embeddings (~274 MB)
+```
+
+> **Note (v2.1):** The pipeline now uses `gemma4:e2b` as a single unified model with a **32k-token context window** and **unlimited output tokens** — no more `gemma2:9b` + `gemma2:2b` split. Older v2.0 install instructions that mention `gemma2` are deprecated.
+
+---
+
+### Launch
+
+After installation, GeneVariate launches like any other desktop app:
+
+| Platform | Launch method |
+|---|---|
+| **Windows** | Start Menu → GeneVariate, or Desktop shortcut |
+| **macOS** | Launchpad → GeneVariate, or Applications folder |
+| **Linux** | Activities → GeneVariate, Desktop shortcut, or `genevariate` in terminal |
+
+Headless mode (for servers / CI):
+```bash
+genevariate --ns-repair
 ```
 
 ---
@@ -241,7 +343,7 @@ genevariate --ns-repair    # NS Repair pipeline (headless)
 
 ```bash
 # One-line setup (after cloning)
-pip install -e . && ollama pull gemma2:9b && ollama pull gemma2:2b && ollama pull nomic-embed-text
+pip install -e . && ollama pull gemma4:e2b && ollama pull nomic-embed-text
 
 # Launch the GUI
 genevariate
@@ -491,12 +593,13 @@ All settings are in `src/genevariate/config.py`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `ai.model` | `gemma2:9b` | Primary LLM for collapse reasoning |
-| `ai.extraction_model` | `gemma2:2b` | Fast model for raw extraction |
+| `ai.model` | `gemma4:e2b` | Primary LLM for extraction + collapse reasoning |
+| `ai.extraction_model` | `gemma4:e2b` | (same model; kept for backwards compatibility) |
 | `ai.embedding_model` | `nomic-embed-text` | Semantic embedding model |
 | `ai.device` | `auto` | GPU/CPU auto-detection (`auto`, `gpu`, `cpu`) |
 | `ai.temperature` | `0` | LLM temperature (deterministic) |
-| `ai.max_tokens` | `150` | Maximum tokens per LLM response |
+| `ai.max_tokens` | `-1` | **Unlimited** output (no truncation) — `-1` is Ollama's "no cap" convention |
+| `ai.num_ctx` | `32768` | 32k context window — fits full GEO metadata + GSE summary |
 | `ai.timeout` | `30` | LLM call timeout in seconds |
 | `threading.max_workers` | `4` | Base parallel extraction threads |
 | `memory.match_threshold` | `0.72` | Cosine similarity floor for semantic matching |
@@ -524,13 +627,12 @@ systemctl start ollama   # systemd (Linux)
 ### Model not found
 
 ```
-Error: model "gemma2:9b" not found
+Error: model "gemma4:e2b" not found
 ```
 
 **Fix:** Pull the required models:
 ```bash
-ollama pull gemma2:9b
-ollama pull gemma2:2b
+ollama pull gemma4:e2b
 ollama pull nomic-embed-text
 ```
 
@@ -580,10 +682,7 @@ GeneVariate auto-detects your RAM tier and adapts:
 
 If OOM still occurs:
 - Close other applications (especially browsers)
-- On very low-RAM systems (< 4 GB), use `gemma2:2b` only by editing `config.py`:
-  ```python
-  'model': 'gemma2:2b',
-  ```
+- The default `gemma4:e2b` model already runs on 4 GB CPU-only machines — no config change needed
 - The watchdog will hard-pause automatically when RAM pressure is critical
 
 ---
@@ -617,5 +716,5 @@ If you use this software in your research, please cite:
 This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
 
 <p align="center">
-  <sub>Built with Ollama + gemma2 | Runs entirely on your hardware | No data leaves your machine</sub>
+  <sub>Built with Ollama + gemma4:e2b | Runs entirely on your hardware | No data leaves your machine</sub>
 </p>
