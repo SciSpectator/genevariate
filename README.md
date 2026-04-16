@@ -1,7 +1,7 @@
 <p align="center">
   <img src="docs/logo.png" alt="GeneVariate Logo" width="300">
   <br><br>
-  <img src="https://img.shields.io/badge/GeneVariate-v1.1-blueviolet?style=for-the-badge" alt="GeneVariate v1.1">
+  <img src="https://img.shields.io/badge/GeneVariate-v1.0-blueviolet?style=for-the-badge" alt="GeneVariate v1.0">
   <br><br>
   <strong>GeneVariate</strong><br>
   <em>Gene Expression Variability Analysis Platform with AI-powered biological metadata extraction</em>
@@ -693,34 +693,6 @@ If OOM still occurs:
 ## :handshake: Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.
-
----
-
-## :sparkles: Release Notes
-
-### v1.1.0 — Upstream LLM-Label-Extractor v2.2 alignment
-
-GeneVariate's extraction layer now mirrors the prompt design and parsing
-behaviour of [SciSpectator/LLM-Label-Extractor v2.2](https://github.com/SciSpectator/LLM-Label-Extractor).
-The model (`gemma4:e2b`), unified 32k context, and 4-tier memory architecture
-are unchanged -- only the prompts and parser were updated:
-
-- **Multi-value semicolon extraction** -- Phase 1a/1b prompts now instruct the
-  LLM to return *all* applicable values separated by `;` when a sample
-  legitimately spans multiple tissues / conditions / treatments. The new
-  `parse_single_label()` cleans, deduplicates, and re-joins each piece.
-- **Coded-value disambiguation** -- the Condition and Treatment Phase 1a
-  prompts explicitly handle GEO's `0/1`, `Y/N`, `Yes/No`, and `True/False`
-  encodings: presence flags pull the condition name from the field name;
-  absence flags map to `Control` / `Not Specified`.
-- **Phase 1b infer prompts** also updated for multi-value support.
-- All other genevariate features (GUI workflow, distribution analysis,
-  statistical comparisons, fluid worker scaling) remain identical.
-
-### v1.0.0 — Initial public release
-
-3-step workflow GUI, multi-phase NS repair pipeline, 4-tier memory system,
-distribution analysis, and full Ollama integration with `gemma4:e2b`.
 
 ---
 
