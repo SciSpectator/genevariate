@@ -1,7 +1,7 @@
 <p align="center">
   <img src="docs/logo.png" alt="GeneVariate Logo" width="300">
   <br><br>
-  <img src="https://img.shields.io/badge/GeneVariate-v1.0-blueviolet?style=for-the-badge" alt="GeneVariate v1.0">
+  <img src="https://img.shields.io/badge/GeneVariate-v1.1-blueviolet?style=for-the-badge" alt="GeneVariate v1.1">
   <br><br>
   <strong>GeneVariate</strong><br>
   <em>Gene Expression Variability Analysis Platform with AI-powered biological metadata extraction</em>
@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/Model-gemma4%3Ae2b-ff6f00?logo=google&logoColor=white" alt="Model: gemma4:e2b">
   <img src="https://img.shields.io/badge/Context-32k%20tokens-1565C0?logo=ollama&logoColor=white" alt="Context: 32k">
   <img src="https://img.shields.io/badge/Status-Stable-brightgreen.svg" alt="Status: Stable">
+  <img src="https://img.shields.io/badge/Extractor-LLM--Label--Extractor%20v2.2-7C3AED.svg" alt="LLM-Label-Extractor v2.2">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/GUI-tkinter-4B8BBE.svg" alt="GUI: tkinter">
   <img src="https://img.shields.io/badge/Docker-Supported-2496ED.svg?logo=docker&logoColor=white" alt="Docker">
@@ -35,7 +36,7 @@ All inference runs locally on your hardware -- no API keys, no cloud, no data le
 | | Feature | Description |
 |---|---|---|
 | :brain: | **4-Tier Memory System** | Cluster map (O(1) lookup), semantic embeddings (cosine RAG), episodic log, knowledge graph -- all SQLite-backed with WAL journaling |
-| :robot: | **Multi-Phase AI Pipeline** | Phase 1 (raw), 1.5 (deterministic collapse), 1c (full-metadata re-extraction), 2 (ReAct collapse agent) — all powered by `gemma4:e2b` with 32k context and **unlimited output tokens** |
+| :robot: | **Multi-Phase AI Pipeline** | Phase 1a/1b (raw + GSE-context inference), 1.5 (deterministic collapse), 1c (full-metadata re-extraction), 2 (ReAct collapse agent) — all powered by `gemma4:e2b` with 32k context and **unlimited output tokens**. Mirrors [LLM-Label-Extractor v2.2](https://github.com/SciSpectator/LLM-Label-Extractor) prompt design with **multi-value semicolon extraction** and **coded-value (0/1, Y/N) disambiguation** |
 | :bar_chart: | **Distribution Analysis** | Classify gene expression into 8 distribution types: normal, lognormal, bimodal, heavy-tailed, uniform, skewed, mixed |
 | :microscope: | **Statistical Comparisons** | Wilcoxon rank-sum, Student's t-test (Welch), Wasserstein distance, Cohen's d, Cliff's delta |
 | :desktop_computer: | **Interactive GUI** | Full Tkinter interface with PCA, histograms, region analysis, group comparison, and live resource monitoring |
@@ -107,6 +108,8 @@ The pipeline uses **autonomous GSEWorker agents** where each GEO experiment is h
    - Reads full parent GSE experiment summary + overall design for context
    - Sends structured prompt to `gemma4:e2b` via Ollama with `num_ctx=32768` and `num_predict=-1` (unlimited output)
    - Extracts verbatim **Tissue**, **Condition**, and **Treatment** labels
+   - Supports **multi-value extraction** -- when a sample applies to multiple tissues / conditions / treatments, all values are returned semicolon-delimited (`Whole Blood; Bone Marrow`)
+   - Recognises **coded values** (`0/1`, `Y/N`, `Yes/No`, `True/False`) -- presence flags map to the field-name's condition, absence flags map to `Control` / `Not Specified`
    - Marks insufficient information as `Not Specified`
    - Checkpoints every 200 samples
 
@@ -690,6 +693,34 @@ If OOM still occurs:
 ## :handshake: Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.
+
+---
+
+## :sparkles: Release Notes
+
+### v1.1.0 — Upstream LLM-Label-Extractor v2.2 alignment
+
+GeneVariate's extraction layer now mirrors the prompt design and parsing
+behaviour of [SciSpectator/LLM-Label-Extractor v2.2](https://github.com/SciSpectator/LLM-Label-Extractor).
+The model (`gemma4:e2b`), unified 32k context, and 4-tier memory architecture
+are unchanged -- only the prompts and parser were updated:
+
+- **Multi-value semicolon extraction** -- Phase 1a/1b prompts now instruct the
+  LLM to return *all* applicable values separated by `;` when a sample
+  legitimately spans multiple tissues / conditions / treatments. The new
+  `parse_single_label()` cleans, deduplicates, and re-joins each piece.
+- **Coded-value disambiguation** -- the Condition and Treatment Phase 1a
+  prompts explicitly handle GEO's `0/1`, `Y/N`, `Yes/No`, and `True/False`
+  encodings: presence flags pull the condition name from the field name;
+  absence flags map to `Control` / `Not Specified`.
+- **Phase 1b infer prompts** also updated for multi-value support.
+- All other genevariate features (GUI workflow, distribution analysis,
+  statistical comparisons, fluid worker scaling) remain identical.
+
+### v1.0.0 — Initial public release
+
+3-step workflow GUI, multi-phase NS repair pipeline, 4-tier memory system,
+distribution analysis, and full Ollama integration with `gemma4:e2b`.
 
 ---
 
