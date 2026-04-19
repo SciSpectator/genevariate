@@ -96,6 +96,156 @@ SPECIES_EXAMPLES = [
 
 
 # -----------------------------------------------------------------------
+# TECHNOLOGY CLASSIFIER
+# -----------------------------------------------------------------------
+# GEOmetadb's `gpl.technology` column lumps all sequencing platforms together
+# as "high-throughput sequencing", which hides the distinction between bulk
+# RNA-seq, scRNA-seq, ChIP-seq, methylation-seq etc. We fold in the platform
+# title to split that bucket, and we normalize the array buckets into a
+# single "microarray" label so the UI can filter meaningfully.
+
+TECH_CATEGORIES = (
+    "microarray",
+    "bulk-rna-seq",
+    "single-cell",
+    "methylation",
+    "sequencing-other",
+    "other",
+)
+
+CATEGORY_LABELS = {
+    "microarray":       "Microarray",
+    "bulk-rna-seq":     "Bulk RNA-seq",
+    "single-cell":      "Single-cell",
+    "methylation":      "Methylation",
+    "sequencing-other": "Sequencing (other)",
+    "other":            "Other",
+}
+
+# Colors used by the GUI Treeview tagging.
+CATEGORY_COLORS = {
+    "microarray":       "#E3F2FD",  # light blue
+    "bulk-rna-seq":     "#E8F5E9",  # light green
+    "single-cell":      "#FFF3E0",  # light orange
+    "methylation":      "#F3E5F5",  # light purple
+    "sequencing-other": "#FFFDE7",  # light yellow
+    "other":            "#FAFAFA",  # light grey
+}
+
+_SINGLE_CELL_PATTERNS = [
+    r"\bsingle[\s\-]?cell\b",
+    r"\bsc[\-_]?rna[\-_]?seq\b",
+    r"\bsn[\-_]?rna[\-_]?seq\b",
+    r"\bsingle[\s\-]?nucle(us|i)\b",
+    r"\b10x\s*genomics\b",
+    r"\bchromium\b",
+    r"\bdrop[\s\-]?seq\b",
+    r"\bsmart[\s\-]?seq2?\b",
+    r"\bcel[\s\-]?seq2?\b",
+    r"\bmars[\s\-]?seq\b",
+    r"\bindrop(s|seq)?\b",
+    r"\bbd\s*rhapsody\b",
+    r"\bfluidigm\s*c1\b",
+    r"\bparse\s*biosciences?\b",
+    r"\bsplit[\s\-]?seq\b",
+]
+
+_METHYLATION_PATTERNS = [
+    r"methylation",
+    r"\bbisulfite\b",
+    r"\binfinium\b",
+    r"\bepic\b",
+    r"\b450k?\b",
+    r"\b850k?\b",
+    r"\bmeth[\s\-]?seq\b",
+    r"\brrbs\b",
+    r"\bwgbs\b",
+]
+
+_BULK_RNASEQ_PATTERNS = [
+    r"\brna[\s\-]?seq\b",
+    r"\btranscriptom",
+    r"\bmrna\b",
+    r"\btotal\s+rna\b",
+    r"\billumina\s+(hi|nova|next)seq",
+    r"\billumina\s+genome\s+analyzer",
+    r"\bion\s+torrent\b",
+    r"\bab\s+solid\b",
+    r"\bbgiseq\b",
+    r"\bpacbio\b",
+    r"\boxford\s+nanopore\b",
+]
+
+_CHIP_ATAC_PATTERNS = [
+    r"\bchip[\s\-]?seq\b",
+    r"\batac[\s\-]?seq\b",
+    r"\bdnase[\s\-]?seq\b",
+    r"\bcut\s*&?\s*run\b",
+    r"\bcut\s*&?\s*tag\b",
+    r"\bhi[\s\-]?c\b",
+    r"\bmnase\b",
+    r"\bribo[\s\-]?seq\b",
+]
+
+
+def classify_technology(technology, title=""):
+    """
+    Map GEOmetadb's (technology, title) pair to one of TECH_CATEGORIES.
+
+    `technology` is GEOmetadb's gpl.technology string; `title` is the
+    platform title which is often where the scRNA-seq / methylation /
+    ChIP-seq distinction actually lives.
+    """
+    tech = (technology or "").strip().lower()
+    name = (title or "").strip().lower()
+    blob = f"{tech} {name}"
+
+    if any(re.search(p, blob) for p in _SINGLE_CELL_PATTERNS):
+        return "single-cell"
+    if any(re.search(p, blob) for p in _METHYLATION_PATTERNS):
+        return "methylation"
+
+    if "sequencing" in tech or tech in ("sage", "mpss"):
+        # ChIP/ATAC/Ribo/Hi-C often run on the same HiSeq boxes, so the
+        # instrument name alone can't distinguish them from bulk RNA-seq.
+        # Check the specific assay keywords first.
+        if any(re.search(p, blob) for p in _CHIP_ATAC_PATTERNS):
+            return "sequencing-other"
+        if any(re.search(p, blob) for p in _BULK_RNASEQ_PATTERNS):
+            return "bulk-rna-seq"
+        return "sequencing-other"
+
+    if "oligonucleotide" in tech or "spotted" in tech or "cdna" in tech \
+            or "array" in tech or "beads" in tech or "bead" in tech \
+            or tech in ("in situ oligonucleotide",):
+        return "microarray"
+
+    if any(re.search(p, blob) for p in _BULK_RNASEQ_PATTERNS):
+        return "bulk-rna-seq"
+    if any(re.search(p, blob) for p in _CHIP_ATAC_PATTERNS):
+        return "sequencing-other"
+
+    return "other"
+
+
+def category_label(category):
+    return CATEGORY_LABELS.get(category, category)
+
+
+def category_color(category):
+    return CATEGORY_COLORS.get(category, "#FAFAFA")
+
+
+# Which categories the GPL series-matrix pipeline can actually process.
+# Bulk RNA-seq GSEs rarely publish expression values inside the series
+# matrix (they're in supplementary files) — so we steer users to ARCHS4.
+# Single-cell is never appropriate for the bulk pipeline.
+SUPPORTED_FOR_SERIES_MATRIX = {"microarray"}
+REROUTE_TO_ARCHS4 = {"bulk-rna-seq"}
+UNSUPPORTED_BY_PIPELINE = {"single-cell"}
+
+
+# -----------------------------------------------------------------------
 # HELPER: Data verification
 # -----------------------------------------------------------------------
 
@@ -612,7 +762,9 @@ def normalize_expression(df):
 
         # Normalize full matrix (column-wise, matching user's method)
         qn_result = qnorm.quantile_normalize(pd.DataFrame(arr))
-        arr = qn_result.values if hasattr(qn_result, 'values') else np.array(qn_result)
+        raw = qn_result.values if hasattr(qn_result, 'values') else np.asarray(qn_result)
+        # qnorm may return a read-only view; make a writable copy
+        arr = np.array(raw, copy=True)
 
         # Restore NaN positions
         arr[nan_mask] = np.nan

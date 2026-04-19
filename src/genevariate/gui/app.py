@@ -15,6 +15,67 @@ try:
 except ImportError:
     ctk = None
     _HAS_CTK = False
+
+# ═══════════════════════════════════════════════════════════════
+#  FRUTIGER AERO PALETTE — glossy white + sky-blue + nature-green
+#  Matches the CellTracker desktop_gui aesthetic.
+# ═══════════════════════════════════════════════════════════════
+AERO = {
+    "bg":            "#FFFFFF",
+    "bg_top":        "#EAF6FE",   # sky gradient top
+    "bg_mid":        "#FFFFFF",
+    "bg_bot":        "#F4FBF2",   # nature gradient bottom
+    "panel":         "#FFFFFF",
+    "panel_top":     "#FCFEFF",   # glossy highlight
+    "panel_bot":     "#EDF7FF",   # reflected-sky base
+    "border":        "#C5DAEA",
+    "border_soft":   "#E0EEF7",
+    "text":          "#0E2A45",
+    "muted":         "#5F7D95",
+    # sky (primary)
+    "accent":        "#1E90E0",
+    "accent_dark":   "#0A5B9A",
+    "accent_light":  "#B9E3FA",
+    "sky_top":       "#6DC8F3",
+    "sky_bot":       "#2B8BD6",
+    # nature (secondary)
+    "green":         "#4CAF50",
+    "green_dark":    "#2E7D32",
+    "green_light":   "#C9EFC7",
+    "leaf_top":      "#8FD98F",
+    "leaf_bot":      "#3FAA45",
+    # states
+    "success":       "#2E7D32",
+    "danger":        "#C0392B",
+    "danger_hover":  "#9E2B1F",
+    "warn":          "#E67E22",
+    "hover_sky":     "#E8F5FD",
+    "pressed_sky":   "#BFE1F6",
+    "glass_hilite":  "#F4FAFE",
+}
+
+
+def _aero_vertical_gradient(canvas, width, height, top, bottom, tag="aero_bg"):
+    """Draw a vertical gradient on a Tk Canvas by stacking horizontal lines.
+    Safe to call repeatedly on resize — removes the previous gradient first."""
+    try:
+        canvas.delete(tag)
+    except Exception:
+        pass
+    if width <= 0 or height <= 0:
+        return
+    tr, tg, tb = canvas.winfo_rgb(top)
+    br, bg_, bb = canvas.winfo_rgb(bottom)
+    tr, tg, tb = tr // 256, tg // 256, tb // 256
+    br, bg_, bb = br // 256, bg_ // 256, bb // 256
+    steps = max(1, height)
+    for y in range(steps):
+        t = y / max(1, steps - 1)
+        r = int(tr * (1 - t) + br * t)
+        g = int(tg * (1 - t) + bg_ * t)
+        b = int(tb * (1 - t) + bb * t)
+        canvas.create_line(0, y, width, y, fill=f"#{r:02x}{g:02x}{b:02x}", tags=tag)
+    canvas.tag_lower(tag)
 import pandas as pd
 import numpy as np
 import queue
@@ -7551,14 +7612,26 @@ class CrossPlatformAnalysisWindow(tk.Toplevel):
 
     # ── UI Construction ─────────────────────────────────────────────
     def _build_ui(self):
-        # Header
-        hdr = tk.Frame(self, bg="#1A237E", height=50)
+        # Frutiger Aero header: glossy sky-blue gradient
+        hdr_h = 54
+        hdr = tk.Canvas(self, height=hdr_h, highlightthickness=0, bd=0,
+                        bg=AERO["sky_bot"])
         hdr.pack(fill=tk.X)
-        hdr.pack_propagate(False)
-        tk.Label(hdr, text="Cross-Platform Gene Expression Analysis",
-                 bg="#1A237E", fg="white", font=('Segoe UI', 14, 'bold')).pack(side=tk.LEFT, padx=15)
-        tk.Label(hdr, text="Compare gene distributions, detect batch effects, find DE & conserved genes",
-                 bg="#1A237E", fg="#90CAF9", font=('Segoe UI', 9, 'italic')).pack(side=tk.LEFT, padx=10)
+        def _paint_cp_hdr(event=None):
+            w = hdr.winfo_width() or 1200
+            _aero_vertical_gradient(hdr, w, hdr_h,
+                                    AERO["sky_bot"], AERO["accent_dark"],
+                                    tag="cp_hdr_bg")
+            hdr.delete("cp_hdr_fg")
+            hdr.create_text(18, hdr_h // 2 - 8,
+                            text="Cross-Platform Gene Expression Analysis",
+                            anchor="w", font=('Segoe UI', 14, 'bold'),
+                            fill="#FFFFFF", tags="cp_hdr_fg")
+            hdr.create_text(18, hdr_h // 2 + 12,
+                            text="Compare gene distributions, detect batch effects, find DE & conserved genes",
+                            anchor="w", font=('Segoe UI', 9, 'italic'),
+                            fill=AERO["accent_light"], tags="cp_hdr_fg")
+        hdr.bind("<Configure>", _paint_cp_hdr)
 
         # ── Top config panel ──
         config_frame = ttk.LabelFrame(self, text="Analysis Configuration", padding=10)
@@ -8773,25 +8846,198 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         self._setup_keyboard_shortcuts()
 
     def _setup_styles(self):
-        """Configure TTK styles."""
+        """Configure TTK styles — Frutiger Aero theme (glossy white + sky-blue +
+        nature-green). Matches CellTracker's desktop_gui aesthetic."""
         style = ttk.Style(self)
-        
+
         available_themes = style.theme_names()
         if 'clam' in available_themes:
             style.theme_use('clam')
         elif 'alt' in available_themes:
             style.theme_use('alt')
-        
-        style.configure("Add.TButton", 
-                       font=('Segoe UI', 11, 'bold'), 
-                       background="#C8E6C9", 
-                       foreground="#2E7D32",
-                       padding=(12, 8))
+
+        # Try to pick up the window bg from ctk; fallback to Aero sky-white
+        try:
+            self.configure(fg_color=AERO["bg_top"])
+        except Exception:
+            try:
+                self.configure(bg=AERO["bg_top"])
+            except Exception:
+                pass
+
+        # ── Base frames / labels ─────────────────────────────────
+        style.configure("TFrame", background=AERO["bg_top"])
+        style.configure("TLabel",
+                        background=AERO["bg_top"],
+                        foreground=AERO["text"],
+                        font=('Segoe UI', 10))
+        style.configure("TLabelframe",
+                        background=AERO["panel"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["border"],
+                        lightcolor=AERO["border_soft"],
+                        darkcolor=AERO["border"],
+                        borderwidth=1,
+                        relief="solid")
+        style.configure("TLabelframe.Label",
+                        background=AERO["bg_top"],
+                        foreground=AERO["accent_dark"],
+                        font=('Segoe UI', 10, 'bold'))
+        style.configure("TSeparator", background=AERO["border"])
+
+        # ── Buttons ──────────────────────────────────────────────
+        style.configure("TButton",
+                        font=('Segoe UI', 10),
+                        background=AERO["glass_hilite"],
+                        foreground=AERO["text"],
+                        bordercolor=AERO["border"],
+                        lightcolor="#FFFFFF",
+                        darkcolor=AERO["border"],
+                        focuscolor=AERO["accent_light"],
+                        relief="flat",
+                        padding=(10, 6))
+        style.map("TButton",
+                  background=[('pressed', AERO["pressed_sky"]),
+                              ('active', AERO["hover_sky"])],
+                  bordercolor=[('active', AERO["accent"]),
+                               ('pressed', AERO["accent_dark"])],
+                  foreground=[('disabled', AERO["muted"])])
+
+        # Green "Add" style — nature accent
+        style.configure("Add.TButton",
+                        font=('Segoe UI', 11, 'bold'),
+                        background=AERO["green_light"],
+                        foreground=AERO["green_dark"],
+                        bordercolor=AERO["green"],
+                        padding=(12, 8),
+                        relief="flat")
         style.map("Add.TButton",
-                  background=[('active', '#A5D6A7'), ('pressed', '#81C784')])
+                  background=[('active', "#A5D6A7"), ('pressed', "#81C784")],
+                  bordercolor=[('active', AERO["green_dark"])])
+
+        # Blue "Action" style — primary sky accent
         style.configure("Action.TButton",
-                       font=('Segoe UI', 10, 'bold'),
-                       padding=(12, 8))
+                        font=('Segoe UI', 10, 'bold'),
+                        background=AERO["accent_light"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["accent"],
+                        padding=(12, 8),
+                        relief="flat")
+        style.map("Action.TButton",
+                  background=[('active', AERO["sky_top"]),
+                              ('pressed', AERO["accent"])],
+                  foreground=[('active', AERO["accent_dark"]),
+                              ('pressed', "#FFFFFF")],
+                  bordercolor=[('active', AERO["accent_dark"])])
+
+        # ── Entries / comboboxes ─────────────────────────────────
+        style.configure("TEntry",
+                        fieldbackground="#FFFFFF",
+                        background="#FFFFFF",
+                        foreground=AERO["text"],
+                        bordercolor=AERO["border"],
+                        lightcolor=AERO["border_soft"],
+                        darkcolor=AERO["border"],
+                        insertcolor=AERO["accent_dark"],
+                        padding=4)
+        style.map("TEntry",
+                  bordercolor=[('focus', AERO["accent"])],
+                  lightcolor=[('focus', AERO["accent_light"])])
+
+        style.configure("TCombobox",
+                        fieldbackground="#FFFFFF",
+                        background=AERO["panel_bot"],
+                        foreground=AERO["text"],
+                        bordercolor=AERO["border"],
+                        arrowcolor=AERO["accent_dark"],
+                        padding=4)
+        style.map("TCombobox",
+                  bordercolor=[('focus', AERO["accent"])],
+                  fieldbackground=[('readonly', "#FFFFFF")])
+
+        # ── Radio / check ────────────────────────────────────────
+        style.configure("TRadiobutton",
+                        background=AERO["bg_top"],
+                        foreground=AERO["text"],
+                        font=('Segoe UI', 10))
+        style.map("TRadiobutton",
+                  background=[('active', AERO["hover_sky"])],
+                  indicatorcolor=[('selected', AERO["accent"]),
+                                  ('!selected', "#FFFFFF")])
+
+        style.configure("TCheckbutton",
+                        background=AERO["bg_top"],
+                        foreground=AERO["text"],
+                        font=('Segoe UI', 10))
+        style.map("TCheckbutton",
+                  background=[('active', AERO["hover_sky"])],
+                  indicatorcolor=[('selected', AERO["accent"]),
+                                  ('!selected', "#FFFFFF")])
+
+        # ── Scrollbars ───────────────────────────────────────────
+        style.configure("Vertical.TScrollbar",
+                        background=AERO["panel_bot"],
+                        troughcolor=AERO["bg_top"],
+                        bordercolor=AERO["border_soft"],
+                        arrowcolor=AERO["accent_dark"],
+                        lightcolor=AERO["border_soft"],
+                        darkcolor=AERO["border"])
+        style.map("Vertical.TScrollbar",
+                  background=[('active', AERO["accent_light"]),
+                              ('pressed', AERO["accent"])])
+        style.configure("Horizontal.TScrollbar",
+                        background=AERO["panel_bot"],
+                        troughcolor=AERO["bg_top"],
+                        bordercolor=AERO["border_soft"],
+                        arrowcolor=AERO["accent_dark"])
+        style.map("Horizontal.TScrollbar",
+                  background=[('active', AERO["accent_light"]),
+                              ('pressed', AERO["accent"])])
+
+        # ── Progress bar — green glossy like CellTracker ────────
+        style.configure("Horizontal.TProgressbar",
+                        background=AERO["green"],
+                        troughcolor=AERO["border_soft"],
+                        bordercolor=AERO["border_soft"],
+                        lightcolor=AERO["leaf_top"],
+                        darkcolor=AERO["green_dark"],
+                        thickness=18)
+        style.configure("TProgressbar",
+                        background=AERO["green"],
+                        troughcolor=AERO["border_soft"],
+                        bordercolor=AERO["border_soft"],
+                        lightcolor=AERO["leaf_top"],
+                        darkcolor=AERO["green_dark"],
+                        thickness=18)
+
+        # ── Notebook (if any) ────────────────────────────────────
+        style.configure("TNotebook",
+                        background=AERO["bg_top"],
+                        bordercolor=AERO["border"])
+        style.configure("TNotebook.Tab",
+                        background=AERO["panel_bot"],
+                        foreground=AERO["text"],
+                        padding=(14, 6),
+                        font=('Segoe UI', 10))
+        style.map("TNotebook.Tab",
+                  background=[('selected', "#FFFFFF"),
+                              ('active', AERO["hover_sky"])],
+                  foreground=[('selected', AERO["accent_dark"])])
+
+        # ── Treeview ─────────────────────────────────────────────
+        style.configure("Treeview",
+                        background="#FFFFFF",
+                        fieldbackground="#FFFFFF",
+                        foreground=AERO["text"],
+                        bordercolor=AERO["border"],
+                        rowheight=22)
+        style.configure("Treeview.Heading",
+                        background=AERO["panel_bot"],
+                        foreground=AERO["accent_dark"],
+                        font=('Segoe UI', 10, 'bold'))
+        style.map("Treeview",
+                  background=[('selected', AERO["accent_light"])],
+                  foreground=[('selected', AERO["accent_dark"])])
     
     def _load_persistent_cache(self):
         """Load GSE context cache from disk (survives restarts).
@@ -8948,13 +9194,33 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
-        tools_menu.add_command(label="Gene Distribution Explorer", 
+        tools_menu.add_command(label="Gene Distribution Explorer",
                               accelerator="Ctrl+G",
                               command=self.show_gene_distribution_popup)
-        tools_menu.add_command(label="Compare Distributions", 
+        tools_menu.add_command(label="Compare Distributions",
                               accelerator="Ctrl+D",
                               command=self.open_compare_window)
-        
+        tools_menu.add_command(label="Distribution Classification",
+                              accelerator="Ctrl+K",
+                              command=self._open_dist_classification)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Cross-Platform Analysis",
+                              command=self._open_cross_platform_analysis)
+        tools_menu.add_command(label="Curate Labels (LLM)",
+                              command=self._open_llm_curator)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Download GPL Platform...",
+                              command=self._open_gpl_downloader_window)
+        tools_menu.add_command(label="Add Custom Platform...",
+                              command=self._load_custom_gpl_data)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Load RNA-seq from ARCHS4...",
+                              command=self._open_archs4_window)
+        tools_menu.add_command(label="Run Enrichment Analysis...",
+                              command=self._open_enrichment_window)
+        tools_menu.add_command(label="Discover Pseudo-Cohorts (embeddings)...",
+                              command=self._open_pseudo_cohorts_window)
+
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Quick Start Guide", command=self._show_help)
@@ -8972,6 +9238,8 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         self.bind('<Control-G>', lambda e: self.show_gene_distribution_popup())
         self.bind('<Control-d>', lambda e: self.open_compare_window())
         self.bind('<Control-D>', lambda e: self.open_compare_window())
+        self.bind('<Control-k>', lambda e: self._open_dist_classification())
+        self.bind('<Control-K>', lambda e: self._open_dist_classification())
         self.bind('<F1>', lambda e: self._show_help())
     
     def _show_welcome_tip(self):
@@ -8986,20 +9254,28 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
             "Press F1 anytime for help."
         )
         
-        info_frame = tk.Frame(self, bg="#E8F5E9", relief=tk.RAISED, borderwidth=2)
+        info_frame = tk.Frame(self, bg=AERO["panel_top"],
+                              highlightthickness=1,
+                              highlightbackground=AERO["accent"],
+                              highlightcolor=AERO["accent"],
+                              bd=0)
         info_frame.place(relx=0.5, rely=0.05, anchor=tk.N)
-        
-        tk.Label(info_frame, text=" Welcome to GeneVariate!", 
+
+        tk.Label(info_frame, text=" Welcome to GeneVariate!",
                 font=('Segoe UI', 11, 'bold'),
-                bg="#E8F5E9", fg="#2E7D32").pack(padx=10, pady=5)
-        tk.Label(info_frame, text=tip_text, 
-                justify=tk.LEFT, bg="#E8F5E9").pack(padx=10, pady=5)
-        
+                bg=AERO["panel_top"], fg=AERO["accent_dark"]).pack(padx=14, pady=6)
+        tk.Label(info_frame, text=tip_text,
+                justify=tk.LEFT,
+                bg=AERO["panel_top"], fg=AERO["text"]).pack(padx=14, pady=5)
+
         def close_tip():
             info_frame.destroy()
-        
+
         tk.Button(info_frame, text="Got it!", command=close_tip,
-                 bg="#4CAF50", fg="white", relief=tk.FLAT).pack(pady=5)
+                 bg=AERO["green"], fg="white", relief=tk.FLAT,
+                 activebackground=AERO["green_dark"],
+                 activeforeground="white",
+                 padx=18, pady=4, bd=0, cursor="hand2").pack(pady=8)
         
         self.after(15000, lambda: info_frame.destroy() if info_frame.winfo_exists() else None)
     
@@ -9429,31 +9705,91 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
     def _setup_ui(self):
         """Sets up the complete user interface with ALL features - NO SIMPLIFICATIONS."""
-        # ── Header banner with logo ──
-        header_frame = tk.Frame(self, bg="#f0f4f8", relief="flat", bd=0)
-        header_frame.pack(fill=tk.X, padx=0, pady=0)
+        # ── Frutiger Aero header: glossy sky-blue gradient with logo ──
+        header_height = 96
+        header_canvas = tk.Canvas(self, height=header_height,
+                                   highlightthickness=0, bd=0,
+                                   bg=AERO["sky_top"])
+        header_canvas.pack(fill=tk.X, padx=0, pady=0)
+        self._header_canvas = header_canvas
+
+        def _paint_header(event=None):
+            w = header_canvas.winfo_width()
+            if w < 2:
+                w = self.winfo_width() or 1200
+            # Smooth background gradient: sky_top -> white (top to bottom).
+            # Use a tinted end color instead of pure white so the sheen band
+            # added below blends without a visible seam.
+            _aero_vertical_gradient(header_canvas, w, header_height,
+                                    AERO["sky_top"], "#F4FBFF",
+                                    tag="aero_header_bg")
+            # Soft glossy sheen across the top third: a second gradient
+            # (white -> current-bg) layered over the base. Previously this
+            # used stipple="gray25" which renders as a literal dot-dither
+            # pattern on modern displays — visible as vertical stripes.
+            header_canvas.delete("aero_gloss")
+            sheen_h = max(1, header_height // 3)
+            try:
+                tr, tg, tb = header_canvas.winfo_rgb("#FFFFFF")
+                br, bg_, bb = header_canvas.winfo_rgb(AERO["sky_top"])
+                tr, tg, tb = tr // 256, tg // 256, tb // 256
+                br, bg_, bb = br // 256, bg_ // 256, bb // 256
+                for y in range(sheen_h):
+                    t = y / max(1, sheen_h - 1)
+                    r = int(tr * (1 - t) + br * t)
+                    g = int(tg * (1 - t) + bg_ * t)
+                    b = int(tb * (1 - t) + bb * t)
+                    header_canvas.create_rectangle(
+                        0, y, w, y + 1,
+                        fill=f"#{r:02x}{g:02x}{b:02x}",
+                        outline="", tags="aero_gloss")
+            except Exception:
+                pass
+            # thin cyan underline
+            header_canvas.delete("aero_underline")
+            header_canvas.create_rectangle(
+                0, header_height - 3, w, header_height,
+                fill=AERO["accent"], outline="", tags="aero_underline")
+            # Re-raise the foreground (logo + titles) above the freshly
+            # painted background so the repaint on resize doesn't bury them.
+            try:
+                header_canvas.tag_raise("aero_header_fg")
+            except Exception:
+                pass
+        header_canvas.bind("<Configure>", _paint_header)
+
+        # Logo
         try:
             from PIL import Image, ImageTk
             _icon_path = Path(__file__).parent.parent / "assets" / "icon.png"
             if _icon_path.exists():
                 _pil_img = Image.open(str(_icon_path))
-                _pil_img = _pil_img.resize((64, 64), Image.LANCZOS)
+                _pil_img = _pil_img.resize((72, 72), Image.LANCZOS)
                 self._header_logo_img = ImageTk.PhotoImage(_pil_img)
-                tk.Label(header_frame, image=self._header_logo_img, bg="#f0f4f8").pack(side=tk.LEFT, padx=(15, 8), pady=8)
+                header_canvas.create_image(
+                    20, header_height // 2,
+                    image=self._header_logo_img, anchor="w",
+                    tags="aero_header_fg")
         except Exception:
-            pass  # Pillow not available — skip logo image
-        title_block = tk.Frame(header_frame, bg="#f0f4f8")
-        title_block.pack(side=tk.LEFT, pady=8)
-        tk.Label(title_block, text="GeneVariate", font=("Segoe UI", 20, "bold"),
-                 fg="#1a5276", bg="#f0f4f8").pack(anchor=tk.W)
-        tk.Label(title_block, text="Gene Expression Variability Analysis Platform",
-                 font=("Segoe UI", 10), fg="#5d6d7e", bg="#f0f4f8").pack(anchor=tk.W)
-        # Thin accent line under header
-        tk.Frame(self, bg="#2e86c1", height=3).pack(fill=tk.X)
+            pass
+
+        header_canvas.create_text(
+            106, header_height // 2 - 10,
+            text="GeneVariate", anchor="w",
+            font=("Segoe UI", 22, "bold"),
+            fill=AERO["accent_dark"], tags="aero_header_fg")
+        header_canvas.create_text(
+            106, header_height // 2 + 18,
+            text="Gene Expression Variability Analysis Platform",
+            anchor="w", font=("Segoe UI", 10),
+            fill=AERO["muted"], tags="aero_header_fg")
 
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=5, pady=2)
-        self.status_label = ttk.Label(status_frame, text="Ready", foreground="gray", font=('Segoe UI', 9))
+        self.status_label = ttk.Label(status_frame, text="Ready",
+                                      foreground=AERO["muted"],
+                                      background=AERO["bg_top"],
+                                      font=('Segoe UI', 9, 'italic'))
         self.status_label.pack(side=tk.LEFT)
 
         # ── Scrollable main content area ──
@@ -9461,7 +9797,20 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._bottom_frame = ttk.Frame(self)
         self._bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
-        main_canvas = tk.Canvas(self, highlightthickness=0)
+        main_canvas = tk.Canvas(self, highlightthickness=0, bg=AERO["bg_top"])
+        # Subtle Frutiger Aero sky→white→green gradient backdrop
+        def _paint_main_bg(event=None):
+            try:
+                w = main_canvas.winfo_width()
+                h = max(main_canvas.winfo_height(),
+                        main_canvas.bbox("all")[3] if main_canvas.bbox("all") else 0)
+                if w > 2 and h > 2:
+                    _aero_vertical_gradient(main_canvas, w, h,
+                                             AERO["bg_top"], AERO["bg_bot"],
+                                             tag="aero_main_bg")
+            except Exception:
+                pass
+        self._paint_main_bg = _paint_main_bg
         main_vsb = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
         self._main_sf = ttk.Frame(main_canvas)
         self._main_sf.bind("<Configure>",
@@ -9470,8 +9819,10 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         main_canvas.configure(yscrollcommand=main_vsb.set)
         main_vsb.pack(side=tk.RIGHT, fill=tk.Y)
         main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        main_canvas.bind("<Configure>",
-                         lambda e: main_canvas.itemconfig(self._main_cw, width=e.width))
+        def _on_main_canvas_configure(e):
+            main_canvas.itemconfig(self._main_cw, width=e.width)
+            _paint_main_bg(e)
+        main_canvas.bind("<Configure>", _on_main_canvas_configure)
         # Mouse wheel scrolling for main content area
         def _on_mousewheel_linux(event):
             try:
@@ -9769,7 +10120,17 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self.log_text.tag_configure("header", foreground="blue", font=('Consolas', 9, 'bold'))
     
     def _add_button_hover(self, button, hover_color, normal_color):
-        """Adds hover effect to buttons."""
+        """Adds Frutiger Aero hover effect to colored buttons.
+        Flattens the relief, applies a subtle border, and switches bg on hover."""
+        try:
+            button.configure(relief="flat", bd=0,
+                              activebackground=hover_color,
+                              activeforeground="#FFFFFF",
+                              highlightthickness=1,
+                              highlightbackground=AERO["accent_dark"],
+                              highlightcolor=AERO["accent"])
+        except Exception:
+            pass
         button.bind("<Enter>", lambda e: button.config(bg=hover_color))
         button.bind("<Leave>", lambda e: button.config(bg=normal_color))
 
@@ -15984,6 +16345,420 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             traceback.print_exc()
 
     # ═══════════════════════════════════════════════════════════════
+    #  Cross-Platform Advanced Analysis — opener
+    # ═══════════════════════════════════════════════════════════════
+    def _open_cross_platform_analysis(self):
+        """Launch the Cross-Platform Analysis window. Requires >=2 loaded platforms."""
+        try:
+            loaded = list(self.gpl_datasets.keys()) if getattr(self, "gpl_datasets", None) else []
+            if len(loaded) < 2:
+                messagebox.showinfo(
+                    "Cross-Platform Analysis",
+                    "Load at least two GPL platforms before running Cross-Platform Analysis.",
+                    parent=self)
+                return
+            CrossPlatformAnalysisWindow(self)
+        except Exception as e:
+            self.enqueue_log(f"[CrossPlatform] Error opening window: {e}")
+            import traceback; traceback.print_exc()
+            messagebox.showerror("Cross-Platform Analysis",
+                                 f"Failed to open window:\n{e}", parent=self)
+
+    # ═══════════════════════════════════════════════════════════════
+    #  ARCHS4 RNA-seq ingestion window
+    # ═══════════════════════════════════════════════════════════════
+    def _open_archs4_window(self):
+        """Open the ARCHS4 RNA-seq ingestion dialog."""
+        try:
+            from genevariate.core.sources import Archs4Source
+        except Exception:
+            Archs4Source = None
+        if Archs4Source is None:
+            messagebox.showerror(
+                "ARCHS4 unavailable",
+                "archs4py is not installed.\n\n"
+                "Install with:\n  pip install 'genevariate[analysis]'",
+                parent=self)
+            return
+
+        dlg = tk.Toplevel(self); dlg.title("Load RNA-seq from ARCHS4"); dlg.transient(self)
+        ttk.Label(dlg, text="Fetch bulk RNA-seq counts from the ARCHS4 mirror",
+                  font=('Segoe UI', 12, 'bold')).pack(padx=15, pady=(15, 4))
+        ttk.Label(dlg, text="First download is ~30 GB per species (cached afterwards).",
+                  foreground="gray").pack(padx=15, pady=(0, 10))
+
+        form = ttk.Frame(dlg); form.pack(padx=15, pady=5, fill="x")
+        ttk.Label(form, text="Query (GSE accession or comma-separated GSMs):")\
+            .grid(row=0, column=0, sticky="w")
+        q_var = tk.StringVar(value="GSE64016")
+        ttk.Entry(form, textvariable=q_var, width=40).grid(row=0, column=1, padx=5, pady=3)
+        ttk.Label(form, text="Species:").grid(row=1, column=0, sticky="w")
+        sp_var = tk.StringVar(value="human")
+        ttk.Combobox(form, textvariable=sp_var, values=["human", "mouse"],
+                     state="readonly", width=10).grid(row=1, column=1, sticky="w", padx=5, pady=3)
+        ttk.Label(form, text="Dataset name:").grid(row=2, column=0, sticky="w")
+        name_var = tk.StringVar(value="ARCHS4_RNA-seq")
+        ttk.Entry(form, textvariable=name_var, width=40).grid(row=2, column=1, padx=5, pady=3)
+
+        status = ttk.Label(dlg, text="", foreground="#0A5B9A"); status.pack(padx=15, pady=(4, 0))
+        pbar = ttk.Progressbar(dlg, mode="determinate", length=420)
+        pbar.pack(padx=15, pady=(2, 6))
+
+        def _progress(msg, frac):
+            self.after(0, lambda: (status.config(text=msg),
+                                    pbar.configure(value=max(0, min(100, int(frac * 100))))))
+
+        def _run():
+            q = q_var.get().strip()
+            if not q:
+                messagebox.showwarning("Missing query", "Provide a GSE or GSM list.", parent=dlg); return
+            ds_name = (name_var.get() or "").strip() or "ARCHS4_RNA-seq"
+            if ds_name in self.gpl_datasets:
+                messagebox.showerror("Name exists", f"'{ds_name}' is already loaded.", parent=dlg); return
+            go_btn.config(state="disabled")
+
+            def _worker():
+                try:
+                    src = Archs4Source(species=sp_var.get())
+                    query = q if q.upper().startswith("GSE") else [s.strip() for s in q.split(",") if s.strip()]
+                    df = src.fetch(query, progress=_progress)
+                    out_dir = os.path.join(self.output_dir, "archs4")
+                    fname = f"{ds_name.lower().replace(' ', '_')}.csv.gz"
+                    prov = df.attrs.get("provenance")
+                    path = src.save_csv(df, out_dir, fname, provenance=prov)
+                    self.after(0, lambda: (dlg.destroy(),
+                                            self._load_gpl_data(ds_name, path)))
+                    ver = (prov or {}).get("h5_version", "unknown")
+                    self.enqueue_log(
+                        f"[ARCHS4] Saved {df.shape[0]} samples × {df.shape[1] - 2} genes → {path} "
+                        f"(ARCHS4 v{ver}; sidecar .meta.json written)"
+                    )
+                except Exception as e:
+                    self.after(0, lambda err=e: (go_btn.config(state="normal"),
+                                                  status.config(text=f"Error: {err}", foreground="red")))
+                    import traceback; traceback.print_exc()
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        btns = ttk.Frame(dlg); btns.pack(pady=(4, 12))
+        go_btn = ttk.Button(btns, text="Download & Load", command=_run, style="Action.TButton")
+        go_btn.pack(side="left", padx=5)
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="left", padx=5)
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Enrichment analysis window — 4 novel methods
+    # ═══════════════════════════════════════════════════════════════
+    def _open_enrichment_window(self):
+        """Open the enrichment dialog with 4 methods:
+           mean-based, ΔVariance, bimodality-gated, cross-platform meta."""
+        from genevariate.core.analysis import (
+            run_enrichr, run_prerank_gsea, rank_genes_by_condition,
+            enrichment_report_markdown, DEFAULT_LIBRARIES,
+            rank_genes_by_variability, run_variability_gsea,
+            variability_report_markdown, VARIABILITY_METHODS,
+            combine_ranks, run_meta_enrichment_gsea,
+            meta_enrichment_report_markdown,
+            classify_distributions, filter_ranked_by_distribution,
+        )
+
+        loaded = list(self.gpl_datasets.keys()) if getattr(self, "gpl_datasets", None) else []
+        if not loaded:
+            messagebox.showinfo("Enrichment",
+                                "Load a platform first (Tools → Download GPL / ARCHS4 / Add Custom).",
+                                parent=self); return
+
+        dlg = tk.Toplevel(self); dlg.title("Run Enrichment Analysis"); dlg.transient(self)
+        ttk.Label(dlg, text="Pathway / Ontology Enrichment",
+                  font=('Segoe UI', 12, 'bold')).pack(padx=15, pady=(15, 2))
+        ttk.Label(dlg,
+                  text="Four ranking methods — see method dropdown for details.",
+                  foreground="gray").pack(padx=15, pady=(0, 8))
+
+        form = ttk.Frame(dlg); form.pack(padx=15, pady=5, fill="x")
+
+        ttk.Label(form, text="Method:").grid(row=0, column=0, sticky="w")
+        METHOD_OPTS = [
+            "mean (standard GSEA, t-statistic)",
+            "mean (moderated t, empirical Bayes)",
+            "variance — log-variance z (ΔVariance, recommended)",
+            "variance — Brown-Forsythe (ΔVariance)",
+            "variance — Levene (ΔVariance, legacy)",
+            "variance — KS distribution shape (legacy)",
+            "variance — Wasserstein (legacy)",
+            "variance — log2 var-ratio",
+            "bimodality-gated mean GSEA",
+            "cross-platform meta (rank-product)",
+            "cross-platform meta (Stouffer z)",
+        ]
+        method_var = tk.StringVar(value=METHOD_OPTS[0])
+        ttk.Combobox(form, textvariable=method_var, values=METHOD_OPTS,
+                     state="readonly", width=48).grid(row=0, column=1, padx=5, pady=3, sticky="w")
+
+        ttk.Label(form, text="Platform:").grid(row=1, column=0, sticky="w")
+        plat_var = tk.StringVar(value=loaded[0])
+        ttk.Combobox(form, textvariable=plat_var, values=loaded,
+                     state="readonly", width=32).grid(row=1, column=1, padx=5, pady=3, sticky="w")
+        ttk.Label(form, text="  (meta methods use ALL loaded platforms)",
+                  foreground="gray").grid(row=1, column=2, sticky="w")
+
+        ttk.Label(form, text="Case label:").grid(row=2, column=0, sticky="w")
+        case_var = tk.StringVar(value="case")
+        ttk.Entry(form, textvariable=case_var, width=32).grid(row=2, column=1, padx=5, pady=3, sticky="w")
+        ttk.Label(form, text="Control label:").grid(row=3, column=0, sticky="w")
+        ctrl_var = tk.StringVar(value="control")
+        ttk.Entry(form, textvariable=ctrl_var, width=32).grid(row=3, column=1, padx=5, pady=3, sticky="w")
+
+        ttk.Label(form, text="Gene-set libraries (comma-sep):")\
+            .grid(row=4, column=0, sticky="w")
+        libs_var = tk.StringVar(value=",".join(DEFAULT_LIBRARIES))
+        ttk.Entry(form, textvariable=libs_var, width=60).grid(row=4, column=1, padx=5, pady=3, sticky="w", columnspan=2)
+
+        ttk.Label(form, text="Top genes for ORA:").grid(row=5, column=0, sticky="w")
+        topn_var = tk.IntVar(value=250)
+        ttk.Entry(form, textvariable=topn_var, width=10).grid(row=5, column=1, sticky="w", padx=5, pady=3)
+
+        status = ttk.Label(dlg, text="", foreground="#0A5B9A"); status.pack(padx=15, pady=(4, 0))
+
+        def _sample_labels_for(df):
+            labels = {}
+            if getattr(self, "sample_labels", None):
+                labels = {k: v for k, v in self.sample_labels.items() if isinstance(v, str)}
+            if not labels and "condition" in df.columns:
+                labels = {str(g).upper(): str(c)
+                          for g, c in zip(df["GSM"], df["condition"])
+                          if isinstance(c, str)}
+            return labels
+
+        def _run():
+            method_txt = method_var.get()
+            libs = [s.strip() for s in libs_var.get().split(",") if s.strip()]
+            case_lbl, ctrl_lbl = case_var.get().strip(), ctrl_var.get().strip()
+            topn = max(10, int(topn_var.get() or 250))
+            go_btn.config(state="disabled")
+
+            def _worker():
+                try:
+                    out_dir = os.path.join(self.output_dir, "enrichment")
+                    os.makedirs(out_dir, exist_ok=True)
+
+                    # ─── Cross-platform meta ────────────────────────
+                    if method_txt.startswith("cross-platform"):
+                        use_stouffer = "Stouffer" in method_txt
+                        per_platform = {}
+                        for name in loaded:
+                            df_p = self.gpl_datasets[name]
+                            labs = _sample_labels_for(df_p)
+                            if not labs: continue
+                            try:
+                                per_platform[name] = rank_genes_by_condition(
+                                    df_p, labs, case_lbl, ctrl_lbl)
+                            except Exception as ex:
+                                self.enqueue_log(f"[Meta] skipping {name}: {ex}")
+                        if len(per_platform) < 2:
+                            raise RuntimeError("Need ≥2 platforms with valid labels for meta-enrichment.")
+
+                        self.after(0, lambda: status.config(text="Combining per-platform ranks..."))
+                        method = "stouffer" if use_stouffer else "rank_product"
+                        combined = combine_ranks(per_platform, method=method,
+                                                  stat_col="t_stat")
+                        self.after(0, lambda: status.config(text="Running meta-GSEA..."))
+                        gsea = run_meta_enrichment_gsea(combined, gene_sets=libs)
+                        comp = f"meta_{method}__{case_lbl}_vs_{ctrl_lbl}"
+                        md_path = os.path.join(out_dir, f"{comp}.md")
+                        meta_enrichment_report_markdown(combined, gsea,
+                                                         list(per_platform),
+                                                         comp, method, out_path=md_path)
+                        combined.to_csv(os.path.join(out_dir, f"{comp}_combined.csv"))
+                        if gsea is not None and not gsea.empty:
+                            gsea.to_csv(os.path.join(out_dir, f"{comp}_gsea.csv"), index=False)
+                        self.enqueue_log(f"[Meta-Enrichment] Report → {md_path}")
+                        self.after(0, lambda: (status.config(text=f"Saved → {md_path}", foreground="#2E7D32"),
+                                                go_btn.config(state="normal")))
+                        return
+
+                    # ─── Single-platform paths ──────────────────────
+                    plat = plat_var.get()
+                    df = self.gpl_datasets.get(plat)
+                    if df is None or df.empty:
+                        raise RuntimeError(f"Platform '{plat}' has no data.")
+                    labels = _sample_labels_for(df)
+                    if not labels:
+                        raise RuntimeError("No sample labels found. Run Tools → Curate Labels first.")
+
+                    # Variance methods
+                    if method_txt.startswith("variance"):
+                        vmap = {
+                            "log-variance z": "logvar_z",
+                            "Brown-Forsythe": "bf",
+                            "Levene":         "levene",
+                            "KS":             "ks",
+                            "Wasserstein":    "wasserstein",
+                            "log2 var":       "logvar_ratio",
+                        }
+                        vmethod = next(v for k, v in vmap.items() if k in method_txt)
+                        self.after(0, lambda: status.config(text=f"Ranking by {vmethod}..."))
+                        ranked = rank_genes_by_variability(df, labels,
+                                                            case_lbl, ctrl_lbl,
+                                                            method=vmethod)
+                        self.after(0, lambda: status.config(text="Running ΔVariance GSEA..."))
+                        gsea = run_variability_gsea(ranked, gene_sets=libs)
+                        comp = f"{plat}__{case_lbl}_vs_{ctrl_lbl}__{vmethod}"
+                        md_path = os.path.join(out_dir, f"variance_{comp}.md")
+                        variability_report_markdown(ranked, gsea, comp, vmethod,
+                                                     out_path=md_path)
+                        ranked.to_csv(os.path.join(out_dir, f"variance_{comp}_ranked.csv"))
+                        if gsea is not None and not gsea.empty:
+                            gsea.to_csv(os.path.join(out_dir, f"variance_{comp}_gsea.csv"), index=False)
+                        self.enqueue_log(f"[ΔVariance] Report → {md_path}")
+                        self.after(0, lambda: (status.config(text=f"Saved → {md_path}", foreground="#2E7D32"),
+                                                go_btn.config(state="normal")))
+                        return
+
+                    # Bimodality-gated
+                    if method_txt.startswith("bimodality"):
+                        self.after(0, lambda: status.config(text="Classifying distributions..."))
+                        tags = classify_distributions(df)
+                        ranked = rank_genes_by_condition(df, labels, case_lbl, ctrl_lbl)
+                        gated  = filter_ranked_by_distribution(ranked, tags,
+                                                                keep=("Bimodal", "Multimodal"))
+                        if len(gated) < 15:
+                            raise RuntimeError(
+                                f"Too few bimodal genes ({len(gated)}) on {plat}. "
+                                "Use a larger platform or relax keep=() tags.")
+                        self.after(0, lambda: status.config(text=f"GSEA on {len(gated)} bimodal genes..."))
+                        gsea = run_prerank_gsea(gated, gene_sets=libs)
+                        comp = f"{plat}__{case_lbl}_vs_{ctrl_lbl}__bimodal"
+                        md_path = os.path.join(out_dir, f"bimodality_{comp}.md")
+                        enrichment_report_markdown(pd.DataFrame(), gsea, comp,
+                                                     out_path=md_path)
+                        tags.to_csv(os.path.join(out_dir, f"bimodality_{comp}_tags.csv"),
+                                    header=["distribution"])
+                        if gsea is not None and not gsea.empty:
+                            gsea.to_csv(os.path.join(out_dir, f"bimodality_{comp}_gsea.csv"), index=False)
+                        self.enqueue_log(f"[Bimodality-gated] Report → {md_path}")
+                        self.after(0, lambda: (status.config(text=f"Saved → {md_path}", foreground="#2E7D32"),
+                                                go_btn.config(state="normal")))
+                        return
+
+                    # Mean-based (default standard GSEA + ORA)
+                    use_moderated = "moderated" in method_txt
+                    self.after(0, lambda: status.config(
+                        text=f"Ranking by mean ({'moderated t' if use_moderated else 't-stat'})..."))
+                    ranked = rank_genes_by_condition(df, labels, case_lbl, ctrl_lbl,
+                                                      moderated=use_moderated)
+                    top_up = list(ranked.head(topn).index)
+                    self.after(0, lambda: status.config(text="Running Enrichr ORA..."))
+                    ora = run_enrichr(top_up, gene_sets=libs)
+                    self.after(0, lambda: status.config(text="Running GSEA prerank..."))
+                    gsea = run_prerank_gsea(ranked, gene_sets=libs)
+                    comp = f"{plat}__{case_lbl}_vs_{ctrl_lbl}"
+                    md_path = os.path.join(out_dir, f"{comp}.md")
+                    enrichment_report_markdown(ora, gsea, comp, out_path=md_path)
+                    ora.to_csv(os.path.join(out_dir, f"{comp}_enrichr.csv"), index=False)
+                    if gsea is not None and not gsea.empty:
+                        gsea.to_csv(os.path.join(out_dir, f"{comp}_gsea.csv"), index=False)
+                    self.enqueue_log(f"[Enrichment] Report → {md_path}")
+                    self.after(0, lambda: (status.config(text=f"Saved → {md_path}", foreground="#2E7D32"),
+                                            go_btn.config(state="normal")))
+                except Exception as e:
+                    self.after(0, lambda err=e: (status.config(text=f"Error: {err}", foreground="red"),
+                                                  go_btn.config(state="normal")))
+                    import traceback; traceback.print_exc()
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        btns = ttk.Frame(dlg); btns.pack(pady=(10, 12))
+        go_btn = ttk.Button(btns, text="Run Enrichment", command=_run, style="Action.TButton")
+        go_btn.pack(side="left", padx=5)
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=5)
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Pseudo-cohort discovery window (embedding-clustered labels)
+    # ═══════════════════════════════════════════════════════════════
+    def _open_pseudo_cohorts_window(self):
+        """Discover sample cohorts by clustering embedded LLM-curated labels."""
+        from genevariate.core.analysis import (
+            discover_pseudo_cohorts, cohort_summary, cohort_pairs,
+        )
+
+        labels = {}
+        if getattr(self, "sample_labels", None):
+            labels = {k: v for k, v in self.sample_labels.items() if isinstance(v, str) and v.strip()}
+        if len(labels) < 4:
+            messagebox.showinfo("Pseudo-cohorts",
+                                f"Need ≥4 LLM-curated sample labels, have {len(labels)}.\n"
+                                "Run Tools → Curate Labels (LLM) first.",
+                                parent=self); return
+
+        dlg = tk.Toplevel(self); dlg.title("Discover Pseudo-Cohorts"); dlg.transient(self)
+        ttk.Label(dlg, text="Embedding-clustered sample cohorts",
+                  font=('Segoe UI', 12, 'bold')).pack(padx=15, pady=(15, 2))
+        ttk.Label(dlg, text=f"{len(labels)} labelled samples — clustering by semantic similarity.",
+                  foreground="gray").pack(padx=15, pady=(0, 8))
+
+        form = ttk.Frame(dlg); form.pack(padx=15, pady=5, fill="x")
+        ttk.Label(form, text="k_min:").grid(row=0, column=0, sticky="w")
+        kmin_var = tk.IntVar(value=2)
+        ttk.Entry(form, textvariable=kmin_var, width=6).grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Label(form, text="k_max:").grid(row=0, column=2, sticky="w", padx=(10, 0))
+        kmax_var = tk.IntVar(value=min(8, max(2, len(labels) // 3)))
+        ttk.Entry(form, textvariable=kmax_var, width=6).grid(row=0, column=3, sticky="w", padx=5)
+
+        out = tk.Text(dlg, height=18, width=90, font=('Consolas', 9))
+        out.pack(padx=15, pady=(8, 4), fill="both", expand=True)
+        status = ttk.Label(dlg, text="", foreground="#0A5B9A"); status.pack(padx=15)
+
+        def _run():
+            go_btn.config(state="disabled")
+            status.config(text="Embedding labels + clustering...", foreground="#0A5B9A")
+            out.delete("1.0", tk.END)
+
+            def _worker():
+                try:
+                    res = discover_pseudo_cohorts(
+                        labels,
+                        k_range=(max(2, int(kmin_var.get() or 2)),
+                                  max(3, int(kmax_var.get() or 8))),
+                    )
+                    summary = cohort_summary(res)
+                    pairs = cohort_pairs(res, min_size=3)
+                    out_dir = os.path.join(self.output_dir, "pseudo_cohorts")
+                    os.makedirs(out_dir, exist_ok=True)
+                    summary.to_csv(os.path.join(out_dir, "cohort_summary.csv"), index=False)
+                    pd.DataFrame({"GSM": list(res.cluster_of),
+                                  "cluster": list(res.cluster_of.values()),
+                                  "label": [res.label_used[g] for g in res.cluster_of]}
+                                 ).to_csv(os.path.join(out_dir, "cluster_assignments.csv"), index=False)
+                    lines = []
+                    lines.append(f"Backend        : {res.backend}")
+                    lines.append(f"k selected     : {res.k_selected}")
+                    lines.append(f"Silhouette     : {res.silhouette:.3f}")
+                    lines.append(f"Pairs to test  : {len(pairs)}")
+                    lines.append("")
+                    lines.append(summary.to_string(index=False))
+                    def _show(txt=lines, out_dir=out_dir):
+                        out.insert(tk.END, "\n".join(txt))
+                        status.config(text=f"Saved → {out_dir}", foreground="#2E7D32")
+                        go_btn.config(state="normal")
+                    self.after(0, _show)
+                    self.enqueue_log(f"[PseudoCohorts] k={res.k_selected} sil={res.silhouette:.3f} "
+                                     f"→ {out_dir}")
+                except Exception as e:
+                    self.after(0, lambda err=e: (status.config(text=f"Error: {err}", foreground="red"),
+                                                  go_btn.config(state="normal")))
+                    import traceback; traceback.print_exc()
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        btns = ttk.Frame(dlg); btns.pack(pady=(4, 12))
+        go_btn = ttk.Button(btns, text="Discover Cohorts", command=_run, style="Action.TButton")
+        go_btn.pack(side="left", padx=5)
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=5)
+
+    # ═══════════════════════════════════════════════════════════════
     #  Distribution Classification — per-gene statistics
     # ═══════════════════════════════════════════════════════════════
     def _open_dist_classification(self):
@@ -16727,6 +17502,24 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                        command=lambda s=sp: self._quick_species_search(s)
                        ).pack(side=tk.LEFT, padx=2)
 
+        # ── Technology category filter row ──────────────────────────
+        from genevariate.core.gpl_downloader import (
+            TECH_CATEGORIES, CATEGORY_LABELS, CATEGORY_COLORS,
+        )
+        filter_row = ttk.Frame(species_frame)
+        filter_row.pack(fill=tk.X, pady=(4, 2))
+        ttk.Label(filter_row, text="Filter by technology:",
+                  font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        self._tech_filter_var = tk.StringVar(value="all")
+        filter_options = [("All", "all")] + [
+            (CATEGORY_LABELS[c], c) for c in TECH_CATEGORIES
+        ]
+        for lbl, val in filter_options:
+            ttk.Radiobutton(filter_row, text=lbl, value=val,
+                            variable=self._tech_filter_var,
+                            command=self._apply_gpl_tech_filter
+                            ).pack(side=tk.LEFT, padx=3)
+
         # Results treeview
         self._species_status = ttk.Label(species_frame,
                                           text="Enter a species name and click Search, "
@@ -16738,20 +17531,29 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         tree_frame = ttk.Frame(species_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        cols = ("GPL", "Title", "Technology", "Samples", "Genes")
+        cols = ("GPL", "Title", "Category", "Technology", "Samples", "Genes")
         self._species_tree = ttk.Treeview(tree_frame, columns=cols,
                                            show="headings", height=12)
         self._species_tree.heading("GPL", text="GPL ID")
         self._species_tree.heading("Title", text="Platform Title")
-        self._species_tree.heading("Technology", text="Technology")
+        self._species_tree.heading("Category", text="Category")
+        self._species_tree.heading("Technology", text="GEO Technology")
         self._species_tree.heading("Samples", text="# Samples")
         self._species_tree.heading("Genes", text="# Genes/Probes")
 
-        self._species_tree.column("GPL", width=80, anchor=tk.CENTER)
-        self._species_tree.column("Title", width=380)
-        self._species_tree.column("Technology", width=160)
+        self._species_tree.column("GPL", width=70, anchor=tk.CENTER)
+        self._species_tree.column("Title", width=320)
+        self._species_tree.column("Category", width=120, anchor=tk.CENTER)
+        self._species_tree.column("Technology", width=150)
         self._species_tree.column("Samples", width=80, anchor=tk.CENTER)
-        self._species_tree.column("Genes", width=100, anchor=tk.CENTER)
+        self._species_tree.column("Genes", width=90, anchor=tk.CENTER)
+
+        # Row coloring by category
+        for cat, color in CATEGORY_COLORS.items():
+            self._species_tree.tag_configure(cat, background=color)
+
+        # Backing store so filter can hide/show rows without re-querying
+        self._species_tree_rows = []
 
         vsb = ttk.Scrollbar(tree_frame, orient="vertical",
                              command=self._species_tree.yview)
@@ -16781,6 +17583,48 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self.auto_dl_status = ttk.Label(win, text="Ready", foreground="gray",
                                          font=('Segoe UI', 9))
         self.auto_dl_status.pack(anchor=tk.W, padx=15, pady=(0, 10))
+
+    def _apply_gpl_tech_filter(self):
+        """Re-render the GPL treeview to show only the selected technology category."""
+        selected = getattr(self, "_tech_filter_var", None)
+        target = selected.get() if selected else "all"
+        rows = getattr(self, "_species_tree_rows", []) or []
+        for item in self._species_tree.get_children():
+            self._species_tree.delete(item)
+
+        # Tally per-category so the status line can show a breakdown —
+        # this makes it obvious that "0 under Single-cell" isn't a bug,
+        # it means this search turned up no single-cell platforms.
+        from collections import Counter
+        from genevariate.core.gpl_downloader import (
+            category_label, TECH_CATEGORIES,
+        )
+        counts = Counter(cat for _, cat in rows)
+
+        shown = 0
+        for values, category in rows:
+            if target != "all" and category != target:
+                continue
+            self._species_tree.insert("", tk.END, values=values, tags=(category,))
+            shown += 1
+
+        if not rows or not hasattr(self, "_species_status"):
+            return
+
+        breakdown = ", ".join(
+            f"{category_label(c)}: {counts.get(c, 0)}"
+            for c in TECH_CATEGORIES if counts.get(c)
+        )
+        if target == "all":
+            text = (f"Showing all {len(rows)} platform(s)  |  {breakdown}  |  "
+                    f"Double-click a row to download.")
+            color = "green"
+        else:
+            text = (f"Showing {shown} of {len(rows)} platform(s) "
+                    f"({category_label(target)})  |  {breakdown}  |  "
+                    f"Double-click a row to download.")
+            color = "green" if shown else "orange"
+        self._species_status.config(text=text, foreground=color)
 
     def _quick_species_search(self, species):
         """Set species entry and search."""
@@ -16814,6 +17658,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # Clear old results
         for item in self._species_tree.get_children():
             self._species_tree.delete(item)
+        self._species_tree_rows = []
 
         def _bg_search():
             try:
@@ -16836,13 +17681,17 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     rows = self.gds_conn.execute(query, (search_upper, like_pattern)).fetchall()
                     search_desc = f"GPL ID '{search_upper}'"
                 else:
-                    # Fast query: get GPLs first WITHOUT sample count (avoids slow subquery)
+                    # Fast query: get GPLs first WITHOUT sample count (avoids slow subquery).
+                    # IMPORTANT: do NOT sort/limit by data_row_count — RNA-seq and
+                    # single-cell GPLs have 0 probes in GEOmetadb and would otherwise
+                    # be pushed off the end of the list, making them invisible under
+                    # any non-microarray technology filter.
                     query = """
                         SELECT gpl.gpl, gpl.title, gpl.technology, gpl.organism,
                                gpl.data_row_count
                         FROM gpl
                         WHERE LOWER(gpl.organism) LIKE ? OR LOWER(gpl.title) LIKE ?
-                        ORDER BY gpl.data_row_count DESC LIMIT 200
+                        LIMIT 600
                     """
                     pattern = f"%{species.lower()}%"
                     rows = self.gds_conn.execute(query, (pattern, pattern)).fetchall()
@@ -16887,15 +17736,25 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 # Populate treeview on main thread
                 def _populate():
                     try:
+                        from genevariate.core.gpl_downloader import (
+                            classify_technology, category_label,
+                        )
+                        self._species_tree_rows = []
                         for gpl_id, title, tech, organism, n_probes, n_samples in rows_with_counts:
-                            title = (title or "")[:80]
-                            tech = (tech or "")[:30]
+                            title_full = title or ""
+                            title_disp = title_full[:80]
+                            tech_full = tech or ""
+                            tech_disp = tech_full[:30] or "Unknown"
                             n_probes = n_probes or 0
-                            self._species_tree.insert("", tk.END, values=(
-                                gpl_id, title, tech,
+                            category = classify_technology(tech_full, title_full)
+                            cat_disp = category_label(category)
+                            values = (
+                                gpl_id, title_disp, cat_disp, tech_disp,
                                 f"{n_samples:,}" if n_samples else "?",
-                                f"{n_probes:,}" if n_probes else "?"
-                            ))
+                                f"{n_probes:,}" if n_probes else "?",
+                            )
+                            self._species_tree_rows.append((values, category))
+                        self._apply_gpl_tech_filter()
                         actual_org = rows[0][3] if rows and rows[0][3] else species
                         done_text = (f"Found {len(rows)} platform(s) for {search_desc} "
                                      f"({actual_org}). Double-click to download.")
@@ -17037,6 +17896,74 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 f"The database may be too old.", parent=self)
             return
 
+        # ── Route by technology category ───────────────────────────
+        from genevariate.core.gpl_downloader import (
+            classify_technology, category_label,
+        )
+        category = classify_technology(info.get('technology', ''),
+                                        info.get('title', ''))
+        cat_disp = category_label(category)
+
+        if category == "single-cell":
+            messagebox.showwarning(
+                "Single-cell platform",
+                f"{gpl_id} is a single-cell platform ({info['title']}).\n\n"
+                f"The bulk series-matrix pipeline cannot process single-cell "
+                f"data correctly: each GSM is a library of thousands of cells "
+                f"whose expression lives in supplementary 10x / h5ad / mtx "
+                f"bundles, not the series matrix.\n\n"
+                f"Load scRNA-seq via a dedicated pseudobulk or cellxgene "
+                f"workflow instead.",
+                parent=self)
+            return
+
+        if category == "bulk-rna-seq":
+            organism_lower = (info.get('organism', '') or '').lower()
+            archs4_supported = ("homo sapiens" in organism_lower
+                                or "mus musculus" in organism_lower
+                                or "human" in organism_lower
+                                or "mouse" in organism_lower)
+            if archs4_supported:
+                choice = messagebox.askyesnocancel(
+                    "Bulk RNA-seq platform",
+                    f"{gpl_id} is a bulk RNA-seq platform ({info['title']}).\n\n"
+                    f"GEO series matrices for RNA-seq rarely contain "
+                    f"expression values — counts live in supplementary files.\n\n"
+                    f"Recommended: load this data via ARCHS4 "
+                    f"(uniformly-processed counts for human/mouse).\n\n"
+                    f"Yes  = open ARCHS4 loader\n"
+                    f"No   = try the series-matrix pipeline anyway\n"
+                    f"Cancel = abort",
+                    parent=self)
+                if choice is None:
+                    return
+                if choice:
+                    self._open_archs4_window()
+                    return
+            else:
+                if not messagebox.askyesno(
+                    "Bulk RNA-seq (non-human/mouse)",
+                    f"{gpl_id} is a bulk RNA-seq platform for "
+                    f"{info.get('organism', 'unknown organism')}.\n\n"
+                    f"ARCHS4 only covers human and mouse, so we'll fall "
+                    f"back to the series-matrix pipeline — but many "
+                    f"RNA-seq GSEs won't have expression values there.\n\n"
+                    f"Proceed anyway?",
+                    parent=self):
+                    return
+
+        elif category in ("methylation", "sequencing-other", "other"):
+            if not messagebox.askyesno(
+                f"{cat_disp} platform",
+                f"{gpl_id} is a {cat_disp.lower()} platform "
+                f"({info['title']}).\n\n"
+                f"The pipeline is tuned for microarray series matrices. "
+                f"Results on {cat_disp.lower()} data may be incomplete or "
+                f"require manual cleanup.\n\n"
+                f"Proceed anyway?",
+                parent=self):
+                return
+
         # ── Import downloader for the actual download work ──
         try:
             from genevariate.core.gpl_downloader import GPLDownloader
@@ -17057,7 +17984,8 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         n_to_dl = min(info['total_series'], max_gse) if max_gse else info['total_series']
         if not messagebox.askyesno(f"Download {gpl_id}?",
             f"Platform: {info['title']}\nOrganism: {info['organism']}\n"
-            f"Technology: {info['technology']}\nSeries: {n_to_dl} of {info['total_series']}\n\n"
+            f"Category: {cat_disp}\nGEO technology: {info['technology']}\n"
+            f"Series: {n_to_dl} of {info['total_series']}\n\n"
             f"Output: GSM | series_id | genes (NaN preserved)\n\nProceed?", parent=self):
             return
         
