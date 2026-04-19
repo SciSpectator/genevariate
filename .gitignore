@@ -36,6 +36,10 @@ Thumbs.db
 # Exclude only the uncompressed temp version
 **/GEOmetadb.sqlite.tmp.sqlite
 **/biomedical_memory.db
+# Uncompressed SQLite + WAL sidecars (regenerated from the .gz at runtime)
+**/GEOmetadb.sqlite
+**/GEOmetadb.sqlite-shm
+**/GEOmetadb.sqlite-wal
 
 # Platform data (large CSV/GZ files)
 **/*_data.csv.gz

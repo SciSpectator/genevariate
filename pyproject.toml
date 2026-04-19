@@ -4,49 +4,96 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genevariate"
-version = "1.0.0"
-description = "Gene Expression Variability Analysis Platform with AI-powered metadata extraction"
+version = "2.1.0"
+description = "Variability-aware cross-technology gene-expression analysis platform with LLM-curated labels and novel enrichment methods (ΔVariance, bimodality-gated, cross-platform meta, embedding-clustered pseudo-cohorts)"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "GeneVariate Development Team"},
 ]
-keywords = ["bioinformatics", "gene-expression", "GEO", "microarray", "AI", "LLM"]
+keywords = [
+    "bioinformatics", "gene-expression", "GEO", "microarray", "RNA-seq",
+    "enrichment", "GSEA", "variability", "ARCHS4", "LLM",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "numpy",
-    "pandas",
-    "scipy",
-    "matplotlib",
-    "seaborn",
-    "scikit-learn",
-    "GEOparse",
-    "requests",
-    "psutil",
-    "ollama",
-    "qnorm",
-    "Pillow",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "scikit-learn>=1.3",
+    "GEOparse>=2.0",
+    "requests>=2.31",
+    "psutil>=5.9",
+    "ollama>=0.1.7",
+    "qnorm>=0.8",
+    "Pillow>=10",
+    "tabulate>=0.9",
+    "h5py>=3.9",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "flake8"]
+# Novel analysis methods (enrichment, ARCHS4, embeddings)
+analysis = [
+    "gseapy>=1.1",
+    "archs4py>=0.2.18",
+    "mygene>=3.2",
+    "statsmodels>=0.14",
+]
+# For the empirical Bayes moderated t-statistic and RNA-seq DE
+rnaseq = [
+    "pydeseq2>=0.4",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "flake8>=7.0",
+    "mypy>=1.8",
+]
+all = [
+    "genevariate[analysis,rnaseq,dev]",
+]
 
 [project.scripts]
 genevariate = "genevariate.main:main"
+genevariate-bench = "genevariate.benchmarks.cli:main"
 
 [project.gui-scripts]
 genevariate-gui = "genevariate.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["genevariate*"]
+
+[tool.setuptools.package-data]
+"genevariate.assets" = ["*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: marks tests that require network or large files",
+    "network: marks tests requiring internet",
+]
+
+[tool.coverage.run]
+source = ["src/genevariate/core"]
+omit = ["*/tests/*", "*/gui/*"]
