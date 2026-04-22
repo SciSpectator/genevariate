@@ -104,31 +104,44 @@ def check_data_directory():
         data_dir.mkdir(parents=True, exist_ok=True)
     
     if not geo_db.exists():
-        print("\n" + "=" * 60)
-        print("WARNING: GEOmetadb.sqlite.gz Not Found")
-        print("=" * 60)
-        print(f"Expected location: {geo_db}")
-        print()
-        print("Download it using one of these methods:")
-        print()
-        print("  Option 1 - Git LFS:")
-        print("    git lfs install && git lfs pull")
-        print()
-        print("  Option 2 - Direct download (wget):")
-        print(f"    wget -O {geo_db} \\")
-        print("      https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz")
-        print()
-        print("  Option 3 - Direct download (curl):")
-        print(f"    curl -L -o {geo_db} \\")
-        print("      https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz")
-        print()
-        print("Note: The application will start, but Step 1 (GSE Extraction)")
-        print("      will not work without this database.")
-        print("=" * 60)
+        # Try auto-searching the local filesystem before warning the user
+        try:
+            from genevariate.core.db_loader import find_geometadb
+            found = find_geometadb(log_fn=lambda m: None)
+        except Exception:
+            found = None
+
+        if found:
+            size_gb = Path(found).stat().st_size / (1024**3)
+            print(f"✓ GEOmetadb auto-discovered: {found} ({size_gb:.1f} GB)")
+        else:
+            print("\n" + "=" * 60)
+            print("WARNING: GEOmetadb.sqlite.gz Not Found")
+            print("=" * 60)
+            print(f"Expected location: {geo_db}")
+            print("(also auto-searched ~/Desktop, ~/Downloads, ~, "
+                  "project dirs — nothing found)")
+            print()
+            print("Download it using one of these methods:")
+            print()
+            print("  Option 1 - Git LFS:")
+            print("    git lfs install && git lfs pull")
+            print()
+            print("  Option 2 - Direct download (wget):")
+            print(f"    wget -O {geo_db} \\")
+            print("      https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz")
+            print()
+            print("  Option 3 - Direct download (curl):")
+            print(f"    curl -L -o {geo_db} \\")
+            print("      https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz")
+            print()
+            print("Note: The application will start, but Step 1 (GSE Extraction)")
+            print("      will not work without this database.")
+            print("=" * 60)
     else:
         size_gb = geo_db.stat().st_size / (1024**3)
         print(f"✓ GEOmetadb found ({size_gb:.1f} GB)")
-    
+
     return True
 
 

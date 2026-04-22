@@ -18,12 +18,120 @@ import shutil
 import sqlite3
 import time
 import logging
-from typing import Optional, Callable
+from pathlib import Path
+from typing import Optional, Callable, List
 
 logger = logging.getLogger(__name__)
 
 # Chunk size for streaming decompression (16 MB)
 _DECOMPRESS_CHUNK = 1024 * 1024 * 16
+
+# Filename patterns accepted during auto-discovery
+_GEOMETADB_PATTERNS = (
+    "GEOmetadb.sqlite",
+    "GEOmetadb.sqlite.gz",
+    "GEOmetadb.sqlite.tmp.sqlite",
+    "GEOmetadb*.sqlite",
+    "GEOmetadb*.sqlite.gz",
+    "geometadb*.sqlite",
+    "geometadb*.sqlite.gz",
+)
+
+
+def find_geometadb(extra_dirs: Optional[List[str]] = None,
+                   log_fn: Callable = print) -> Optional[str]:
+    """Scan the local filesystem for a GEOmetadb SQLite file.
+
+    Returns the best (largest, most recent) match or None if nothing is found.
+    Preference order when multiple matches exist:
+        1. uncompressed .sqlite (faster)
+        2. larger size (more complete DB)
+        3. more recently modified
+
+    Locations searched (dedup'd, existence-checked):
+        * CONFIG['paths']['geo_db'] (configured default)
+        * CONFIG['paths']['data']
+        * Project root, its parent, and ./data under each
+        * Current working directory and ./data
+        * ~/Desktop, ~/Downloads, ~ (shallow only — no full-home walk)
+        * Any `extra_dirs` passed in
+    """
+    candidates: List[Path] = []
+    seen_dirs = set()
+
+    def _add_dir(d):
+        if not d:
+            return
+        p = Path(d).expanduser()
+        if p in seen_dirs:
+            return
+        seen_dirs.add(p)
+        if not p.exists() or not p.is_dir():
+            return
+        for pattern in _GEOMETADB_PATTERNS:
+            try:
+                for match in p.glob(pattern):
+                    if match.is_file() and match.stat().st_size > 1024:
+                        candidates.append(match)
+            except (OSError, PermissionError):
+                continue
+
+    # 1. Config defaults
+    cfg_geo = None
+    cfg_data = None
+    project_base = None
+    try:
+        from genevariate.config import CONFIG, BASE_DIR
+        cfg_geo = CONFIG.get('paths', {}).get('geo_db')
+        cfg_data = CONFIG.get('paths', {}).get('data')
+        project_base = BASE_DIR
+    except Exception:
+        pass
+
+    # If the configured default file itself exists, it's the preferred answer
+    if cfg_geo and Path(cfg_geo).exists():
+        log_fn(f"[GEOmetadb] Using configured path: {cfg_geo}")
+        return str(cfg_geo)
+
+    # Otherwise crawl likely directories
+    _add_dir(cfg_data)
+    if project_base:
+        _add_dir(project_base)
+        _add_dir(project_base / 'data')
+        _add_dir(project_base.parent)
+        _add_dir(project_base.parent / 'data')
+
+    _add_dir(os.getcwd())
+    _add_dir(Path(os.getcwd()) / 'data')
+    _add_dir(Path.home() / 'Desktop')
+    _add_dir(Path.home() / 'Downloads')
+    _add_dir(Path.home())
+
+    if extra_dirs:
+        for d in extra_dirs:
+            _add_dir(d)
+
+    if not candidates:
+        log_fn("[GEOmetadb] Auto-search found no local GEOmetadb file")
+        return None
+
+    # Sort: uncompressed first, then larger, then newer
+    def _score(p: Path):
+        is_gz = p.suffix == ".gz"
+        try:
+            size = p.stat().st_size
+            mtime = p.stat().st_mtime
+        except OSError:
+            size, mtime = 0, 0
+        return (0 if not is_gz else 1, -size, -mtime)
+
+    candidates = sorted(set(candidates), key=_score)
+    best = candidates[0]
+    log_fn(f"[GEOmetadb] Auto-discovered: {best} "
+           f"({best.stat().st_size / (1024**2):.0f} MB"
+           + (f"; {len(candidates)-1} other candidate(s) ignored" if len(candidates) > 1 else "")
+           + ")")
+    return str(best)
 
 
 def _persistent_decompress(gz_path: str,
@@ -125,14 +233,25 @@ def open_geometadb(db_path: str = None,
     Returns:
         sqlite3.Connection or None on failure.
     """
-    # Resolve path
+    # Resolve path — try in order: explicit arg, config default, local auto-search
     if db_path is None:
         try:
             from genevariate.config import CONFIG
             db_path = str(CONFIG['paths']['geo_db'])
         except Exception:
-            log_fn("[GEOmetadb] No path provided and config unavailable")
+            db_path = None
+
+    if not db_path or not os.path.exists(db_path):
+        if db_path:
+            log_fn(f"[GEOmetadb] Configured path not found ({db_path}); "
+                   f"auto-searching local filesystem...")
+        else:
+            log_fn("[GEOmetadb] No path configured; auto-searching local filesystem...")
+        found = find_geometadb(log_fn=log_fn)
+        if found is None:
+            log_fn("[GEOmetadb] Could not locate a local GEOmetadb .sqlite/.sqlite.gz file")
             return None
+        db_path = found
 
     db_path = str(db_path)
     if not os.path.exists(db_path):

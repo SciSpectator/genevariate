@@ -333,75 +333,35 @@ class ResourceWatchdog:
 
 
 def _find_geometadb():
-    """Search common locations for GEOmetadb.sqlite.gz (case-insensitive filename).
-    
-    app.py lives in genevariate/gui/app.py
-    GEOmetadb is at genevariate/data/GEOmetadb.sqlite.gz
-    So the key path is: _PROG_DIR/../data/GEOmetadb.sqlite.gz
+    """Locate a local GEOmetadb file (.sqlite or .sqlite.gz).
+
+    Delegates to genevariate.core.db_loader.find_geometadb so that the
+    GUI and the core loader use the SAME search logic (one source of truth).
+    Returns an existing file path, or a sensible placeholder path if nothing
+    is found (so startup code that expects a string path stays happy).
     """
-    _TARGET = 'geometadb.sqlite.gz'  # lowercase for matching
-    _PROG_DIR = os.path.dirname(os.path.abspath(__file__))  # genevariate/gui/
-    _PROJ_ROOT = os.path.dirname(_PROG_DIR)                 # genevariate/
-    _CWD = os.getcwd()
+    _PROG_DIR = os.path.dirname(os.path.abspath(__file__))   # genevariate/gui/
+    _PROJ_ROOT = os.path.dirname(_PROG_DIR)                  # genevariate/
+    _default = os.path.join(_PROJ_ROOT, 'data', 'GEOmetadb.sqlite.gz')
 
-    candidates = [
-        # PRIMARY: project structure (app.py in gui/, data in ../data/)
-        os.path.join(_PROJ_ROOT, 'data', 'GEOmetadb.sqlite.gz'),
-        os.path.join(_PROJ_ROOT, 'GEOmetadb.sqlite.gz'),
-        # Fallbacks
-        os.path.join(_PROG_DIR, 'GEOmetadb.sqlite.gz'),
-        os.path.join(_CWD, 'GEOmetadb.sqlite.gz'),
-        os.path.join(_PROG_DIR, 'data', 'GEOmetadb.sqlite.gz'),
-        os.path.join(_CWD, 'data', 'GEOmetadb.sqlite.gz'),
-        os.path.join(_PROG_DIR, '..', 'data', 'GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/.genevariate/GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/.genevariate/data/GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/Desktop/GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/Downloads/GEOmetadb.sqlite.gz'),
-        os.path.expanduser('~/data/GEOmetadb.sqlite.gz'),
-        './GEOmetadb.sqlite.gz',
-        './data/GEOmetadb.sqlite.gz',
-    ]
+    try:
+        from genevariate.core.db_loader import find_geometadb as _core_find
+        # Silence the core log here — we log our own line below for clarity
+        found = _core_find(log_fn=lambda m: None)
+    except Exception:
+        found = None
 
-    # Case-insensitive search in common dirs
-    search_dirs = [
-        os.path.join(_PROJ_ROOT, 'data'),  # genevariate/data/ — PRIMARY
-        _PROJ_ROOT,                          # genevariate/
-        _PROG_DIR,                           # genevariate/gui/
-        _CWD,
-        os.path.join(_PROG_DIR, 'data'),
-        os.path.join(_CWD, 'data'),
-        os.path.expanduser('~'),
-        os.path.expanduser('~/Desktop'),
-        os.path.expanduser('~/Downloads'),
-        os.path.expanduser('~/Documents'),
-        os.path.expanduser('~/.genevariate'),
-        os.path.expanduser('~/.genevariate/data'),
-        '.',
-        './data',
-    ]
-    dd = _find_data_dir()
-    if dd:
-        search_dirs.extend([dd, os.path.dirname(dd)])
+    if found and os.path.exists(found):
+        try:
+            size_mb = os.path.getsize(found) / (1024 * 1024)
+            print(f"[GEOmetadb] Auto-discovered: {found} ({size_mb:.0f} MB)")
+        except OSError:
+            print(f"[GEOmetadb] Auto-discovered: {found}")
+        return found
 
-    for d in search_dirs:
-        if os.path.isdir(d):
-            try:
-                for f in os.listdir(d):
-                    if f.lower() == _TARGET:
-                        candidates.append(os.path.join(d, f))
-            except Exception:
-                pass
-
-    seen = set()
-    for p in candidates:
-        rp = os.path.realpath(p)
-        if rp not in seen and os.path.exists(p):
-            return p
-        seen.add(rp)
-
-    return candidates[0]  # fallback to default
+    # Nothing found — fall back to the configured default (non-existent is fine;
+    # downstream code handles the "file missing" case).
+    return _default
 
 def _find_data_dir():
     """Find or create data directory.
@@ -10945,6 +10905,228 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             self.enqueue_log(traceback.format_exc())
             return False
 
+    def _read_gene_columns_from_csv(self, file_path):
+        """Return the list of gene-like column names from a GPL CSV header.
+
+        Reads ONLY the header row (no data) and removes known metadata columns
+        defined in genevariate.config.METADATA_EXCLUSIONS. Supports .csv and .csv.gz.
+        """
+        if not file_path or not Path(file_path).exists():
+            return []
+        try:
+            from genevariate.config import METADATA_EXCLUSIONS
+        except Exception:
+            METADATA_EXCLUSIONS = {'GSM', 'series_id', 'Series', 'series'}
+
+        is_gz = str(file_path).lower().endswith('.gz')
+        try:
+            import gzip as _gz
+            opener = _gz.open if is_gz else open
+            with opener(file_path, 'rt', encoding='utf-8', errors='replace') as f:
+                header_line = f.readline().strip()
+        except Exception as exc:
+            self.enqueue_log(f"[GeneList] could not read header of {file_path}: {exc}")
+            return []
+
+        all_cols = [c.strip().strip('"') for c in header_line.split(',')]
+        exclude_upper = {s.upper() for s in METADATA_EXCLUSIONS}
+        genes = [c for c in all_cols if c.upper() not in exclude_upper]
+        return genes
+
+    def _show_gene_list_for_selected_platforms(self, popup):
+        """Open a window listing genes for every currently-selected platform.
+
+        Also shows union / intersection tabs when >1 platform is selected.
+        Includes a search/filter box and 'Save CSV' / 'Copy' actions.
+        """
+        sel_vars = getattr(popup, 'gpl_selection_vars', {})
+        selected = [plat for plat, var in sel_vars.items() if var.get()]
+        if not selected:
+            messagebox.showinfo(
+                "No Platforms Selected",
+                "Please tick at least one platform checkbox above, "
+                "then click 'Show Gene List' again.",
+                parent=popup
+            )
+            return
+
+        available = self._discover_available_platforms()
+
+        # Collect gene lists per platform
+        gene_lists = {}
+        for plat in selected:
+            # Prefer an already-loaded dataset (canonical column order)
+            if plat in self.gpl_datasets:
+                try:
+                    from genevariate.config import METADATA_EXCLUSIONS
+                except Exception:
+                    METADATA_EXCLUSIONS = {'GSM'}
+                exclude_upper = {s.upper() for s in METADATA_EXCLUSIONS}
+                cols = list(self.gpl_datasets[plat].columns)
+                gene_lists[plat] = [c for c in cols if c.upper() not in exclude_upper]
+            else:
+                fpath = available.get(plat)
+                gene_lists[plat] = self._read_gene_columns_from_csv(fpath)
+
+        # Build the window
+        win = tk.Toplevel(popup)
+        win.title(f"Gene List — {len(selected)} platform(s)")
+        win.geometry("780x640")
+        try:
+            _sw, _sh = win.winfo_screenwidth(), win.winfo_screenheight()
+            win.geometry(f"780x640+{(_sw-780)//2}+{(_sh-640)//2}")
+        except Exception:
+            pass
+        win.transient(popup)
+
+        # Search/filter bar (applies to whichever tab is active)
+        search_frame = ttk.Frame(win, padding=8)
+        search_frame.pack(fill=tk.X)
+        ttk.Label(search_frame, text="Filter:", font=('Segoe UI', 10, 'bold')
+                  ).pack(side=tk.LEFT, padx=(0, 6))
+        search_var = tk.StringVar(master=win)
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=40)
+        search_entry.pack(side=tk.LEFT, padx=4)
+        status_lbl = ttk.Label(search_frame, text="", foreground='#555')
+        status_lbl.pack(side=tk.LEFT, padx=10)
+
+        nb = ttk.Notebook(win)
+        nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        # --- per-tab state so filter can update the right listbox ---
+        tabs = {}  # tab_key -> {'listbox': lb, 'all_genes': [...]}
+
+        def _make_tab(label, genes):
+            frame = ttk.Frame(nb, padding=6)
+            nb.add(frame, text=label)
+            lb = tk.Listbox(frame, font=('Consolas', 10), activestyle='dotbox',
+                            selectmode=tk.EXTENDED)
+            vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=lb.yview)
+            lb.configure(yscrollcommand=vsb.set)
+            lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            for g in genes:
+                lb.insert(tk.END, g)
+            tabs[label] = {'listbox': lb, 'all_genes': list(genes)}
+
+        # Per-platform tabs
+        for plat in selected:
+            genes = gene_lists.get(plat, [])
+            _make_tab(f"{plat} ({len(genes):,})", genes)
+
+        # Union / intersection tabs (only if >1 platform)
+        if len(selected) > 1:
+            upper_sets = {p: {g.upper() for g in gs}
+                          for p, gs in gene_lists.items()}
+            # keep display case from the first platform a gene appears in
+            first_seen = {}
+            for plat in selected:
+                for g in gene_lists.get(plat, []):
+                    first_seen.setdefault(g.upper(), g)
+
+            union_upper = set().union(*upper_sets.values()) if upper_sets else set()
+            inter_upper = set.intersection(*upper_sets.values()) if upper_sets else set()
+            union = sorted({first_seen[u] for u in union_upper}, key=str.upper)
+            inter = sorted({first_seen[u] for u in inter_upper}, key=str.upper)
+            _make_tab(f"Union ({len(union):,})", union)
+            _make_tab(f"Intersection ({len(inter):,})", inter)
+
+        # --- Filter handler ---
+        def _current_tab_key():
+            try:
+                return nb.tab(nb.select(), 'text')
+            except tk.TclError:
+                return None
+
+        def _apply_filter(*_):
+            key = _current_tab_key()
+            if key not in tabs:
+                return
+            q = search_var.get().strip().upper()
+            lb = tabs[key]['listbox']
+            all_genes = tabs[key]['all_genes']
+            lb.delete(0, tk.END)
+            if q:
+                shown = [g for g in all_genes if q in g.upper()]
+            else:
+                shown = all_genes
+            for g in shown:
+                lb.insert(tk.END, g)
+            status_lbl.config(
+                text=f"{len(shown):,} of {len(all_genes):,} genes shown"
+            )
+
+        search_var.trace_add('write', _apply_filter)
+        nb.bind("<<NotebookTabChanged>>", lambda e: _apply_filter())
+        _apply_filter()
+
+        # --- Actions: copy + save ---
+        def _copy_current():
+            key = _current_tab_key()
+            if key not in tabs:
+                return
+            lb = tabs[key]['listbox']
+            sel = [lb.get(i) for i in lb.curselection()]
+            payload = sel if sel else [lb.get(i) for i in range(lb.size())]
+            if not payload:
+                return
+            try:
+                win.clipboard_clear()
+                win.clipboard_append('\n'.join(payload))
+                status_lbl.config(
+                    text=f"Copied {len(payload):,} gene(s) to clipboard"
+                )
+            except Exception as exc:
+                messagebox.showerror("Clipboard error", str(exc), parent=win)
+
+        def _save_current():
+            key = _current_tab_key()
+            if key not in tabs:
+                return
+            genes = tabs[key]['all_genes']
+            if not genes:
+                messagebox.showinfo("Empty", "No genes to save.", parent=win)
+                return
+            default_name = key.split(' (')[0].replace(' ', '_') + "_genes.csv"
+            path = filedialog.asksaveasfilename(
+                parent=win,
+                title="Save Gene List",
+                defaultextension=".csv",
+                initialfile=default_name,
+                filetypes=[("CSV", "*.csv"), ("Text", "*.txt"), ("All files", "*.*")]
+            )
+            if not path:
+                return
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write("gene_symbol\n")
+                    for g in genes:
+                        f.write(f"{g}\n")
+                status_lbl.config(text=f"Saved {len(genes):,} genes -> {path}")
+            except Exception as exc:
+                messagebox.showerror("Save failed", str(exc), parent=win)
+
+        btns = ttk.Frame(win, padding=6)
+        btns.pack(fill=tk.X)
+        tk.Button(btns, text="Copy to Clipboard", command=_copy_current,
+                  bg="#1976D2", fg="white",
+                  font=('Segoe UI', 10, 'bold'), padx=12, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Save CSV...", command=_save_current,
+                  bg="#00796B", fg="white",
+                  font=('Segoe UI', 10, 'bold'), padx=12, pady=4,
+                  cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Close", command=win.destroy,
+                  bg="#757575", fg="white",
+                  font=('Segoe UI', 10), padx=12, pady=4,
+                  cursor="hand2").pack(side=tk.RIGHT, padx=4)
+
+        # Focus the filter box for quick typing
+        try:
+            search_entry.focus()
+        except Exception:
+            pass
+
     def _load_gpl_data(self, gpl_name, file_path, metadata_path=None, gsm_filter=None):
         """
         Load GPL platform data.
@@ -13490,7 +13672,23 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         )
         plot_btn.pack(side=tk.LEFT, padx=5)
         self._add_button_hover(plot_btn, "#388E3C", "#4CAF50")
-        
+
+        gene_list_btn = tk.Button(
+            btn_frame,
+            text=" Show Gene List",
+            command=lambda: self._show_gene_list_for_selected_platforms(popup),
+            bg="#00796B",
+            fg="white",
+            font=('Segoe UI', 10, 'bold'),
+            padx=15,
+            pady=8,
+            cursor="hand2",
+            relief=tk.RAISED,
+            bd=2
+        )
+        gene_list_btn.pack(side=tk.LEFT, padx=5)
+        self._add_button_hover(gene_list_btn, "#004D40", "#00796B")
+
         popup.analyze_selection_btn = tk.Button(
             btn_frame, 
             text=" Analyze Selected Range(s)", 
@@ -17686,12 +17884,15 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     # single-cell GPLs have 0 probes in GEOmetadb and would otherwise
                     # be pushed off the end of the list, making them invisible under
                     # any non-microarray technology filter.
+                    #
+                    # NO LIMIT: previous LIMIT 600 hid thousands of platforms
+                    # (Homo sapiens alone has ~5,900 GPLs with >=1 GSE). Return
+                    # everything that matches the species/title filter.
                     query = """
                         SELECT gpl.gpl, gpl.title, gpl.technology, gpl.organism,
                                gpl.data_row_count
                         FROM gpl
                         WHERE LOWER(gpl.organism) LIKE ? OR LOWER(gpl.title) LIKE ?
-                        LIMIT 600
                     """
                     pattern = f"%{species.lower()}%"
                     rows = self.gds_conn.execute(query, (pattern, pattern)).fetchall()
