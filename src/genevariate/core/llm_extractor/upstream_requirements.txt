@@ -1,0 +1,74 @@
+# LLM-GEO-Label-Extractor — Complete Dependencies
+# Production-ready requirements for the full pipeline (Phase 1 → 1b → 1c → 2)
+# and the unified GUI orchestrator `llm_label_extractor.py`.
+
+# Core Python packages
+numpy>=1.24.0
+requests>=2.28.0
+
+# GUI (tkinter is part of the Python stdlib) + live resource monitoring
+psutil>=5.9.0
+
+# Phase 1c semantic curator (frozen MIPROv2 prompts re-run via DSPy)
+dspy-ai>=2.5.0
+
+# Phase 1c / Phase 2 — BioLORD-2023 semantic retrieval
+sentence-transformers>=2.7.0
+torch>=1.11.0
+transformers>=4.21.0
+scikit-learn>=1.0.0
+
+# Database and file operations
+pathlib2>=2.3.0; python_version<"3.4"
+
+# Multi-processing and threading (usually builtin, but explicit for clarity)
+# multiprocessing - builtin
+# threading - builtin
+# queue - builtin
+# sqlite3 - builtin
+# json - builtin
+# urllib - builtin
+
+# Optional: MCP servers (Model Context Protocol)
+# Uncomment if you want to use mcp_mesh_server.py or mcp_gse_server.py
+# mcp>=0.9
+
+# Optional: OpenTelemetry tracing (Phoenix integration)
+# Uncomment if you want distributed tracing in agents/
+# opentelemetry-api>=1.25
+# opentelemetry-sdk>=1.25
+# opentelemetry-exporter-otlp-proto-http>=1.25
+# openinference-semantic-conventions>=0.1
+
+# Development/compilation dependencies (maintainers only)
+# See requirements-compile.txt for DSPy/MIPROv2 compilation tools
+
+# IMPORTANT SYSTEM DEPENDENCIES (not installable via pip):
+#
+# 1. Ollama LLM Backend:
+#    curl -fsSL https://ollama.com/install.sh | sh
+#    ollama serve &
+#    ollama pull gemma4:e2b
+#
+# 2. GEOmetadb Database (~19 GB):
+#    wget https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz
+#    gunzip GEOmetadb.sqlite.gz
+#
+# 3. MeSH Vocabulary Database:
+#    wget https://nlmpubs.nlm.nih.gov/projects/mesh/MESH_FILES/xmlmesh/desc2026.xml
+#    python build_mesh_db.py --mesh-xml desc2026.xml
+#    # Creates: mesh.sqlite (~35 MB) + mesh.embeddings.npz (~250 MB)
+#
+# 4. Hardware Requirements:
+#    - 8+ GB VRAM (for gemma4:e2b + BioLORD)
+#    - 4+ GB RAM
+#    - 25+ GB disk space
+#    - CUDA-compatible GPU (recommended)
+#
+# 5. Operating System:
+#    - Linux (tested)
+#    - macOS (should work)
+#    - Windows (may require additional setup)
+
+# Quick verification after installation:
+# python verify_installation.py

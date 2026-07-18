@@ -1,0 +1,42 @@
+{
+  "traces": [],
+  "train": [],
+  "demos": [],
+  "signature": {
+    "instructions": "You are an expert biomedical information extraction system. Your task is to analyze the provided textual metadata (Title, Source, Characteristics, Treatment Protocol, Description) from biological or medical records and extract the single most relevant tissue, organ, cell-type, or cell-line span.\n\n**Extraction Rules and Hierarchy (Follow this order strictly):**\n\n1.  **`cell line:`**: This is the most specific tissue identity. If present, this is the span. Do not proceed to check other fields. (e.g., \"MCF-7\").\n2.  **`cell type:`**: If `cell line:` is absent, check for the cell type. (e.g., \"CD14+ cell\").\n3.  **`tissue:`**: If both `cell line:` and `cell type:` are absent, check for the tissue.\n4.  **`organ:` / `anatomical site:` / `biopsy site:`**: Check these only if the above three fields are absent.\n5.  **`source_name`**: If fields 1-4 are absent, extract the source name. Extract verbatim, even if it is a short abbreviation (\"BM\", \"PBMC\", \"WBC\"), a cell-line ID alone (\"LCL GM19238\"), or a treatment/time/replicate-suffixed phrase (e.g., \"LCL GM19238, Kd NR2F6, 72hrs\" $\\rightarrow$ \"LCL GM19238\", stripping only the trailing suffix).\n6.  **`title` / `description`**: These are the last resort, only consulted if every field above is empty.\n\n**Compound Noun Handling (for tissue/organ extraction):**\n*   **Organ + Cancer/Tumor/Carcinoma/Neoplasm:** If a span is a compound phrase with an EXPLICIT organ NOUN (bladder, prostate, lung, breast, liver, colon, kidney, pancreas, brain, ovary, skin, thyroid, bone marrow, etc.) directly adjacent to a cancer / tumor / carcinoma / neoplasm word, return only the ORGAN noun alone. (e.g., \"Bladder Cancer\" $\\rightarrow$ \"Bladder\"; \"Lung Carcinoma\" $\\rightarrow$ \"Lung\").\n*   **Abbreviated Cancers:** If the span is an ABBREVIATED cancer name with no explicit organ noun (OSCC, HCC, TNBC, DLBCL, AML, CLL, GBM, NSCLC, ...), keep the SPAN UNCHANGED. (e.g., \"OSCC primary tumor tissue\" $\\rightarrow$ \"OSCC primary tumor tissue\").\n*   **Cell-line IDs:** Cell-line IDs (e.g., \"MCF-7\", \"HCT116\", \"LAM 621-101\", \"ATCC #CCL-30 RPMI 2650\") must be returned whole.\n\n**Demographics and Sample-handling Noise Filtering:**\n*   **Ignore** demographic fragments such as \"from 68 year old male\" or specific patient conditions like `diagnosis:`, `medical history:`, or `comorbidity:`. These are not tissue identifiers.\n\n**Multi-Tissue Handling:**\n*   If multiple distinct tissues are sampled (e.g., tumor + adjacent normal, explicit co-culture), join them using a semicolon and a space: \"; \".\n*   Redundant descriptors of the same sample (e.g., listing the same tissue multiple times) should *not* be included as multi-tissue entries.\n\n**Default Output:**\nIf NO tissue, organ, cell-type, or cell-line is named anywhere in the metadata fields, output exactly: `Not Specified`.\n\n**Target Output:** Extract the single best TISSUE / ORGAN / CELL-TYPE / CELL-LINE span, copied VERBATIM from the metadata text, following the rules above.",
+    "fields": [
+      {
+        "prefix": "Title:",
+        "description": "Sample title."
+      },
+      {
+        "prefix": "Source:",
+        "description": "Sample source_name field."
+      },
+      {
+        "prefix": "Characteristics:",
+        "description": "Sample characteristics field — usually key:value pairs separated by ';' or '|'."
+      },
+      {
+        "prefix": "Treatment Protocol:",
+        "description": "Sample treatment/lab protocol text."
+      },
+      {
+        "prefix": "Description:",
+        "description": "Sample description."
+      },
+      {
+        "prefix": "Tissue:",
+        "description": "Verbatim tissue/organ/cell span, or 'Not Specified'."
+      }
+    ]
+  },
+  "lm": null,
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.10",
+      "dspy": "3.1.3",
+      "cloudpickle": "3.1"
+    }
+  }
+}

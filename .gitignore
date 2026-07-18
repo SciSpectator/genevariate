@@ -45,6 +45,9 @@ Thumbs.db
 **/*_data.csv.gz
 **/raw_matrices/
 
+# Zebrafish GPL normalized matrices (1.4 GB, downloaded/generated separately)
+/Zebrafish_gpls/
+
 # GPL annotation files (downloaded per-platform)
 src/genevariate/data/GPL*/
 

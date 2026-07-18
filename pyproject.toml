@@ -51,6 +51,14 @@ analysis = [
     "mygene>=3.2",
     "statsmodels>=0.14",
 ]
+# LLM-GEO-Label-Extractor pipeline (vendored under core/llm_extractor)
+# Phase 1c semantic curator + Phase 2 MeSH agent fleet
+llm-extract = [
+    "dspy-ai>=2.5",
+    "sentence-transformers>=2.7",
+    "torch>=1.11",
+    "transformers>=4.21",
+]
 # For the empirical Bayes moderated t-statistic and RNA-seq DE
 rnaseq = [
     "pydeseq2>=0.4",
@@ -62,12 +70,13 @@ dev = [
     "mypy>=1.8",
 ]
 all = [
-    "genevariate[analysis,rnaseq,dev]",
+    "genevariate[analysis,rnaseq,llm-extract,dev]",
 ]
 
 [project.scripts]
 genevariate = "genevariate.main:main"
 genevariate-bench = "genevariate.benchmarks.cli:main"
+genevariate-llm-extract = "genevariate.core.llm_extractor.cli:main"
 
 [project.gui-scripts]
 genevariate-gui = "genevariate.main:main"
@@ -78,6 +87,7 @@ include = ["genevariate*"]
 
 [tool.setuptools.package-data]
 "genevariate.assets" = ["*"]
+"genevariate.core.llm_extractor" = ["compiled/*.json", "UPSTREAM_LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

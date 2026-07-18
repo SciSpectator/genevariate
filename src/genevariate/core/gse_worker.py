@@ -149,6 +149,7 @@ class GSEWorker:
         platform: str = "",
         enable_phase15: bool = True,           # Phase 1.5: deterministic collapse
         enable_phase2: bool = True,            # Phase 2: biomedical DB collapse
+        enricher=None,                          # ExternalEnricher (optional)
     ):
         self.gse_id = gse_id
         self.ctx = ctx
@@ -159,6 +160,10 @@ class GSEWorker:
         self.platform = platform
         self.enable_phase15 = enable_phase15
         self.enable_phase2 = enable_phase2
+        self.enricher = enricher
+        # Per-sample cache of enrichment candidates so _run_field() can see
+        # them without re-querying the enricher for each Phase-1.5 field.
+        self._last_enrichment = None
 
         # Pre-build GSE description block for prompt injection
         lines: List[str] = []
@@ -624,12 +629,30 @@ class GSEWorker:
         result: Dict[str, str] = {col: NS for col in LABEL_COLS_SCRATCH}
         ma = self.mem_agent
 
+        # ── Step 0: External metadata enrichment (ARCHS4 / CELLxGENE / Atlas) ──
+        # Before asking the LLM anything, consult external curated sources for
+        # this GSM/GSE. Any curated tissue / disease / cell-type / factor we
+        # find is prepended to the characteristics string the LLM sees in
+        # Step 1a–1c, and also retained as sibling candidates that Phase 1.5
+        # can use to snap LLM outputs onto curated ontology names.
+        enrichment = None
+        if self.enricher is not None:
+            try:
+                enrichment = self.enricher.enrich(gsm, self.gse_id, raw)
+            except Exception as _e_enr:
+                self._log(f"  [ENRICH] {gsm}: {_e_enr!r}")
+                enrichment = None
+        self._last_enrichment = enrichment
+
         # ── Step 1a: Per-label raw extraction with independent agents (gemma4:e2b) ──
 
         # NO truncation — send full metadata to the LLM (large num_ctx handles it)
         title_str = str(raw.get("gsm_title", raw.get("title", "")))
         source_str = str(raw.get("source_name", raw.get("source_name_ch1", "")))
         chars_str = str(raw.get("characteristics", raw.get("characteristics_ch1", "")))
+        if enrichment is not None and enrichment.block:
+            # Prepend curated metadata so the LLM reads it before the raw text.
+            chars_str = enrichment.block + chars_str
 
         def _extract_one_label(col: str) -> Tuple[str, str]:
             """Extract a single label using its dedicated prompt."""
@@ -789,6 +812,23 @@ class GSEWorker:
             out1 = result.get(col, NS)
             ctx_labels = list(self.ctx.label_counts.get(col, Counter()).keys())
             ctx_counts = dict(self.ctx.label_counts.get(col, Counter()))
+
+            # Extend Phase-1.5 collapse targets with curated sibling
+            # candidates from the external enricher (ARCHS4, CELLxGENE,
+            # Atlas). These are real ontology-backed names that the
+            # deterministic collapser can snap LLM outputs to.
+            _enr = self._last_enrichment
+            if _enr is not None:
+                extra: List[str] = []
+                if col == "Tissue":
+                    extra = list(_enr.tissue_candidates)
+                elif col == "Condition":
+                    extra = list(_enr.condition_candidates)
+                elif col == "Treatment":
+                    extra = list(_enr.treatment_candidates)
+                for _e in extra:
+                    if _e and _e not in ctx_labels:
+                        ctx_labels.append(_e)
 
             # --- GSE rescue for NS labels ---
             if (is_ns(out1) or not out1) and ctx_labels:

@@ -19,6 +19,32 @@ import seaborn as sns
 from scipy.stats import gaussian_kde, ranksums, wasserstein_distance
 from scipy.spatial.distance import pdist, squareform, jensenshannon
 
+# Unified GeneVariate plot stylesheet (graceful fallback if utils missing)
+try:
+    from genevariate.utils.viz_style import (
+        apply_genevariate_style as _apply_gv_style,
+        palette_for as _palette_for,
+        cmap_for as _cmap_for,
+        smart_figsize as _smart_figsize,
+        cap_figsize as _cap_figsize,
+        enable_hover as _enable_hover,
+        EXPORT_DPI as _EXPORT_DPI,
+    )
+    _apply_gv_style()
+except Exception:
+    _EXPORT_DPI = 300
+    def _palette_for(n, use_case="discrete"):
+        if n <= 10: p = sns.color_palette("tab10", n)
+        elif n <= 20: p = sns.color_palette("tab20", n)
+        else: p = sns.color_palette("husl", n)
+        return [mcolors.to_hex(c) for c in p]
+    def _cmap_for(kind="sequential"):
+        return "viridis" if kind != "diverging" else "RdBu_r"
+    def _smart_figsize(kind="default"): return (10, 6)
+    def _cap_figsize(w, h, max_w=16.0, max_h=10.0):
+        return (min(w, max_w), min(h, max_h))
+    def _enable_hover(artists, fig, formatter=None): return None
+
 # ─── Lazy ML imports ───────────────────────────────────────────────
 def _get_sklearn():
     from sklearn.decomposition import PCA
@@ -54,10 +80,8 @@ def _kde(vals, n=300, x_range=None):
     except: return None
 
 def _clrs(n):
-    if n <= 10: p = sns.color_palette("tab10", n)
-    elif n <= 20: p = sns.color_palette("tab20", n)
-    else: p = sns.color_palette("gist_ncar", n)
-    return [mcolors.to_hex(c) for c in p]
+    # Delegate to unified stylesheet for a colorblind-safe, consistent palette.
+    return _palette_for(n, use_case="discrete")
 
 def _tr(s, m=28):
     s = str(s); return (s[:m-1] + '\u2026') if len(s) > m else s
@@ -377,7 +401,7 @@ class CompareDistributionsWindow(tk.Toplevel):
         ax.set_xlabel("Expression"); ax.set_ylabel("Density"); ax.set_ylim(bottom=0)
         ax.set_title(f"Distribution Overlay - {len(sel)} groups ({mode})", fontsize=13, weight='bold')
         if handles:
-            leg = ax.legend(handles=handles, fontsize=7, loc='upper left',
+            leg = ax.legend(handles=handles, fontsize=9, loc='upper left',
                             bbox_to_anchor=(1.01, 1.0), framealpha=0.92)
             _interactive_legend(fig, leg, amap)
         plt.subplots_adjust(right=0.72)
@@ -566,7 +590,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             return
 
         scroll = ScrollFrame(self.t_ai); scroll.pack(fill=tk.BOTH, expand=True)
-        fig, axes = plt.subplots(len(active), 2, figsize=(18, len(active) * 5), squeeze=False)
+        fig, axes = plt.subplots(len(active), 2, figsize=_cap_figsize(18, len(active) * 5), squeeze=False)
 
         for ri, lc in enumerate(active):
             nice = lc.replace('Classified_', '').replace('_', ' ')
@@ -835,25 +859,40 @@ class CompareDistributionsWindow(tk.Toplevel):
     def _scatter(self, ax, coords, labels, title, xlabel, ylabel):
         uniq = list(pd.Series(labels).value_counts().head(_MAX_GRP).index)
         clrs = _clrs(len(uniq))
+        _artists = []
+        _art_labels = {}
         for i, u in enumerate(uniq):
             mask = np.array(labels) == u
-            ax.scatter(coords[mask, 0], coords[mask, 1], c=clrs[i],
+            sc = ax.scatter(coords[mask, 0], coords[mask, 1], c=clrs[i],
                        label=f"{_tr(u)} ({mask.sum()})", alpha=0.7, s=25,
                        edgecolors='black', lw=0.3)
+            _artists.append(sc)
+            _art_labels[sc] = [f"{_tr(u)}" for _ in range(int(mask.sum()))]
         other = ~np.isin(labels, uniq)
         if other.any():
-            ax.scatter(coords[other, 0], coords[other, 1], c='#CCCCCC',
+            sc = ax.scatter(coords[other, 0], coords[other, 1], c='#CCCCCC',
                        label=f"Other ({other.sum()})", alpha=0.3, s=15)
+            _artists.append(sc)
+            _art_labels[sc] = ["Other" for _ in range(int(other.sum()))]
         ax.set_title(title, fontsize=10, weight='bold')
         ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
-        ax.legend(fontsize=6, ncol=max(1, len(uniq) // 6), framealpha=0.9)
+        ax.legend(fontsize=8, ncol=max(1, len(uniq) // 6), framealpha=0.9)
+        # Attach hover tooltips (no-op if mplcursors missing)
+        try:
+            def _fmt(sel):
+                lbls = _art_labels.get(sel.artist, [])
+                idx = int(sel.index)
+                return lbls[idx] if 0 <= idx < len(lbls) else ""
+            _enable_hover(_artists, ax.figure, formatter=_fmt)
+        except Exception:
+            pass
 
     def _export(self):
         d = filedialog.askdirectory(title="Export Folder", parent=self)
         if not d: return
         out = Path(d); out.mkdir(parents=True, exist_ok=True)
         for key, fig in self.figs.items():
-            fig.savefig(out / f"compare_{key}.png", dpi=150, bbox_inches='tight')
+            fig.savefig(out / f"compare_{key}.png", dpi=_EXPORT_DPI, bbox_inches='tight')
         if not self.metadata_df.empty:
             self.metadata_df.to_csv(out / "compare_data.csv", index=False)
         messagebox.showinfo("Exported", f"Saved to {out}", parent=self)

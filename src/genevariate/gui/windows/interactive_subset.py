@@ -16,6 +16,30 @@ import seaborn as sns
 from datetime import datetime
 from pathlib import Path
 
+# Unified GeneVariate plot stylesheet
+try:
+    from genevariate.utils.viz_style import (
+        apply_genevariate_style as _apply_gv_style,
+        palette_for as _palette_for,
+        cmap_for as _cmap_for,
+        smart_figsize as _smart_figsize,
+        cap_figsize as _cap_figsize,
+        enable_hover as _enable_hover,
+        EXPORT_DPI as _EXPORT_DPI,
+    )
+    _apply_gv_style()
+except Exception:
+    _EXPORT_DPI = 300
+    def _palette_for(n, use_case="discrete"):
+        import matplotlib.colors as _mc
+        return [_mc.to_hex(c) for c in sns.color_palette("tab10", n)]
+    def _cmap_for(kind="sequential"):
+        return "viridis" if kind != "diverging" else "RdBu_r"
+    def _smart_figsize(kind="default"): return (10, 6)
+    def _cap_figsize(w, h, max_w=16.0, max_h=10.0):
+        return (min(w, max_w), min(h, max_h))
+    def _enable_hover(artists, fig, formatter=None): return None
+
 
 class ScrollableCanvasFrame(ttk.Frame):
     """A scrollable frame for displaying large content."""
@@ -459,22 +483,42 @@ class InteractiveSubsetAnalyzerWindow(tk.Toplevel):
             
             # Create plot
             fig, ax = plt.subplots(figsize=(10, 8))
-            
+
+            # Track scatter artists + sample labels for hover tooltips
+            _scatter_artists = []
+            _artist_labels = {}
+            sample_ids = list(self.filtered_df.index.astype(str))
+
             # Color by grouping column
             if self.current_grouping_col in self.filtered_df.columns:
                 groups = self.filtered_df[self.current_grouping_col].values
                 unique_groups = np.unique(groups)
                 colors = plt.cm.tab10(np.linspace(0, 1, len(unique_groups)))
-                
+
                 for i, group in enumerate(unique_groups):
                     mask = groups == group
-                    ax.scatter(X_pca[mask, 0], X_pca[mask, 1], 
+                    sc = ax.scatter(X_pca[mask, 0], X_pca[mask, 1],
                              c=[colors[i]], label=group, s=60, alpha=0.6, edgecolors='black', linewidth=0.5)
-                
+                    _scatter_artists.append(sc)
+                    _artist_labels[sc] = [f"{sample_ids[j]} · {group}"
+                                           for j in np.where(mask)[0]]
+
                 has_legend = True
             else:
-                ax.scatter(X_pca[:, 0], X_pca[:, 1], c='steelblue', s=60, alpha=0.6, edgecolors='black', linewidth=0.5)
+                sc = ax.scatter(X_pca[:, 0], X_pca[:, 1], c='steelblue', s=60, alpha=0.6, edgecolors='black', linewidth=0.5)
+                _scatter_artists.append(sc)
+                _artist_labels[sc] = sample_ids
                 has_legend = False
+
+            # Optional hover tooltips (no-op if mplcursors not installed)
+            try:
+                def _fmt(sel):
+                    lbls = _artist_labels.get(sel.artist, [])
+                    idx = int(sel.index)
+                    return lbls[idx] if 0 <= idx < len(lbls) else str(idx)
+                _enable_hover(_scatter_artists, fig, formatter=_fmt)
+            except Exception:
+                pass
 
             ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% variance)',
                          fontsize=12, fontweight='bold')

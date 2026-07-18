@@ -1,0 +1,42 @@
+{
+  "traces": [],
+  "train": [],
+  "demos": [],
+  "signature": {
+    "instructions": "Extract the treatment(s) applicable to THIS sample — the drug(s),\ncompound(s), genetic perturbation(s), exposure(s), or clinical /\nexperimental procedure(s) applied to this particular sample.\n\nReturn the intervention name(s) as they appear in the metadata. When\nmore than one applies to this sample, join with \"; \" in the order\nthey appear. For a control / vehicle / untreated arm, return the\nexact control substring (e.g. \"DMSO\", \"shRNA_Ctrl\", \"non-silencing\nvector\", \"0nM dasatinib\"). If no intervention applies, output\nexactly: Not Specified.\n\nTreatments include:\n  - Drugs and small-molecule compounds, recognised by name or by\n    characteristic suffix: -mab (trastuzumab, rituximab), -nib\n    (imatinib, dasatinib, bortezomib), -mycin (rapamycin, doxycycline),\n    -ciclib, -statin, -tinib, -parib, -lisib, -zumab. Also named\n    chemotherapeutics (cisplatin, doxorubicin, 5-FU, paclitaxel,\n    temozolomide, methotrexate), steroids (dexamethasone, prednisone),\n    cytokines (IL-2, TNF-alpha, IFN-gamma), growth factors (EGF, FGF),\n    hormones (estradiol, tamoxifen, insulin), antibiotics (puromycin,\n    G418, hygromycin) used as experimental reagents.\n  - Dose / concentration + drug patterns: keep the full substring with\n    the concentration attached (\"100 nM dasatinib\", \"10 uM MG132\",\n    \"0nM dasatinib\" as control, \"1 ug/mL doxycycline\", \"5 Gy\n    irradiation\"). A zero or vehicle concentration of a named drug is\n    still a valid Treatment span (it denotes the control arm).\n  - Vehicles / solvents as explicit control arms: DMSO, PBS, saline,\n    ethanol, water, vehicle, mock, untreated, sham.\n  - Genetic perturbations: shRNA, siRNA, sgRNA, gRNA, CRISPR, Cas9,\n    knockdown (KD), knockout (KO), overexpression (OE), transfection,\n    transduction, viral infection, inducible expression. Keep compound\n    construct names intact: \"inducible shRNA-mediated LRH-1 knockdown\",\n    \"shMLH1\", \"kd NR2F6\", \"siSCR\", \"shRNA_Ctrl\".\n  - Physical / environmental exposures: ionizing radiation,\n    irradiation, UV, hypoxia, normoxia, heat shock, cold stress,\n    smoking, cigarette smoke.\n  - Clinical procedures used as the experimental intervention:\n    surgery, resection, radiation therapy, chemotherapy, induction\n    chemotherapy, chemoradiation, transplantation.\n\nDiseases, tissues / organs / cell lines, and sample-handling lab\nprotocols (RNA extraction, TRIzol, Illumina library prep, FFPE\nembedding, LCM, microdissection) are NOT treatments.\n\nCoded values: a field named for a drug with a short code as its value\n(e.g. `bortezomib: BR`, `dasatinib: D1`, `cisplatin: C`) indicates\nthat drug was applied to this sample — return the drug name from the\nfield label. For codes decoded by a literal legend elsewhere in this\nsample's metadata (e.g. `treatment*: S, RT` + \"s=surgery; RT=radiation\ntherapy\"), return only the decoded names for codes THIS sample\nactually carries.\n\nKeep intervention names verbatim including dose/concentration tokens\nwhen they appear attached to the drug name. Do not rewrite, expand\nabbreviations, or change case.\n\nTREATMENT — UNIVERSAL DEFINITION (must override any other guidance below): A Treatment is an in-vivo or in-vitro PERTURBATION applied to the biological sample's source organism / tissue / cell line BEFORE the molecular assay was run — drugs and their doses; genetic perturbations (shRNA, siRNA, CRISPR, KO, OE, inducible expression, transgene); irradiation; environmental exposures (hypoxia, heat shock, UV, smoke); or clinical procedures. Text that describes the MOLECULAR ASSAY ITSELF — chemical conversion of nucleic acids, hybridisation, library construction, scan / sequencing protocol, kit names, reagent names, instrument names — is NOT a Treatment, regardless of whether it appears in a field literally named `treatment_protocol`. When the only treatment-shaped text in the sample's metadata is assay-protocol text, output exactly: Not Specified.",
+    "fields": [
+      {
+        "prefix": "Title:",
+        "description": "Sample title."
+      },
+      {
+        "prefix": "Source:",
+        "description": "Sample source_name field."
+      },
+      {
+        "prefix": "Characteristics:",
+        "description": "Sample characteristics field — usually key:value pairs."
+      },
+      {
+        "prefix": "Treatment Protocol:",
+        "description": "Sample treatment/lab protocol text — may contain lab handling (not a treatment) or the actual experimental treatment. Read carefully."
+      },
+      {
+        "prefix": "Description:",
+        "description": "Sample description."
+      },
+      {
+        "prefix": "Treatment:",
+        "description": "Verbatim treatment / drug / intervention, or 'Not Specified'."
+      }
+    ]
+  },
+  "lm": null,
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.10",
+      "dspy": "3.1.3",
+      "cloudpickle": "3.1"
+    }
+  }
+}

@@ -130,7 +130,6 @@ except ImportError:
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-plt.rcParams['figure.max_open_warning'] = 20  # Warn early about too many figures
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.widgets import RectangleSelector
@@ -138,6 +137,40 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import seaborn as sns
+
+# Unified plot theme (Frutiger Aero). Applies rcParams once, globally.
+try:
+    from genevariate.utils.viz_style import (
+        apply_genevariate_style as _apply_viz_style,
+        palette_for as viz_palette_for,
+        cmap_for as viz_cmap_for,
+        apply_plot_polish as viz_apply_polish,
+        apply_aero_background as viz_apply_aero_bg,
+        style_axis as viz_style_axis,
+        smart_figsize as viz_smart_figsize,
+        cap_figsize as viz_cap_figsize,
+        enable_hover as viz_enable_hover,
+    )
+    _apply_viz_style()
+except Exception:
+    def viz_palette_for(n, use_case="discrete"):
+        return [mcolors.to_hex(c) for c in sns.color_palette("tab10", max(1, n))]
+    def viz_cmap_for(kind="intensity"):
+        return "viridis"
+    def viz_apply_polish(ax, **kw):
+        ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
+    def viz_apply_aero_bg(ax): pass
+    def viz_style_axis(ax, xlabel=None, ylabel=None, title=None, grid=True):
+        if xlabel: ax.set_xlabel(xlabel, fontsize=11, fontweight='bold')
+        if ylabel: ax.set_ylabel(ylabel, fontsize=11, fontweight='bold')
+        if title:  ax.set_title(title, fontsize=13, fontweight='bold', pad=8)
+    def viz_smart_figsize(kind="default", n_plots=1, n_rows=1):
+        return (10, 6)
+    def viz_cap_figsize(w, h):
+        return (min(w, 16), min(h, 10))
+    def viz_enable_hover(*args, **kwargs):
+        return None
+    plt.rcParams['figure.max_open_warning'] = 50
 from scipy.stats import ranksums, wasserstein_distance, gaussian_kde
 from scipy.signal import find_peaks
 try:
@@ -834,7 +867,7 @@ class ExtractionThread(threading.Thread):
                     "pubmed_id", "contributor"}
 
     def __init__(self, gz_path, plat_filter, search_tokens, log_func,
-                 on_finish, gui_ref):
+                 on_finish, gui_ref, search_sources=None, subfilters=None):
         super().__init__(daemon=True)
         self.gz_path = gz_path
         self.plat_filter = plat_filter
@@ -842,6 +875,15 @@ class ExtractionThread(threading.Thread):
         self.log_func = log_func
         self.on_finish_cb = on_finish
         self.gui_ref = gui_ref
+        # Which sources to query. GEOmetadb is opt-in now — every source the
+        # user ticks is queried; others are skipped. Hits from all sources
+        # merge into final_df with a "Source" column.
+        if search_sources is None:
+            self.search_sources = {"geo"}
+        else:
+            self.search_sources = {str(s).lower() for s in search_sources}
+        # Per-source sub-filters (organism, tissue/disease/assay, species, …)
+        self.subfilters = dict(subfilters or {})
         # Outputs
         self.final_df = None
         self.gse_keywords = {}
@@ -859,25 +901,34 @@ class ExtractionThread(threading.Thread):
     # ────────────────────────────────────────────────────────────────
     def run(self):
         mem_conn = None
+        db_conn = None
         try:
             self._log("PROGRESS: 0")
-            self._log("[Step 1] Loading GEOmetadb into thread-local memory...")
 
-            if not os.path.exists(self.gz_path):
-                self._log(f"[Step 1] ERROR: GEOmetadb not found at {self.gz_path}")
+            if "geo" in self.search_sources:
+                self._log("[Step 1] Loading GEOmetadb into thread-local memory...")
+                if not os.path.exists(self.gz_path):
+                    self._log(f"[Step 1] ERROR: GEOmetadb not found at {self.gz_path}")
+                    self.final_df = pd.DataFrame()
+                else:
+                    # ── Open GEOmetadb (resource-aware: disk or RAM) ──
+                    from genevariate.core.db_loader import open_geometadb
+                    db_conn = open_geometadb(self.gz_path, log_fn=self._log)
+                    if db_conn is None:
+                        self._log("[Step 1] ERROR: Could not open GEOmetadb")
+                        self.final_df = pd.DataFrame()
+                    else:
+                        self._log("PROGRESS: 10")
+                        self._do_search(db_conn)
+            else:
+                self._log("[Step 1] GEOmetadb skipped (not selected)")
+                # Prime token normalisation + empty frame so merge path works
+                self._prime_tokens()
                 self.final_df = pd.DataFrame()
-                return
-
-            # ── Open GEOmetadb (resource-aware: disk or RAM) ──
-            from genevariate.core.db_loader import open_geometadb
-            db_conn = open_geometadb(self.gz_path, log_fn=self._log)
-            if db_conn is None:
-                self._log("[Step 1] ERROR: Could not open GEOmetadb")
-                self.final_df = pd.DataFrame()
-                return
-
-            self._log("PROGRESS: 10")
-            self._do_search(db_conn)
+                self._log("PROGRESS: 20")
+                extra = self.search_sources - {"geo"}
+                if extra:
+                    self._merge_external_sources(extra)
 
         except Exception as e:
             import traceback
@@ -892,6 +943,22 @@ class ExtractionThread(threading.Thread):
                 pass
             if self.gui_ref:
                 self.gui_ref.after(0, self.on_finish_cb)
+
+    # ────────────────────────────────────────────────────────────────
+    def _prime_tokens(self):
+        """Populate ``self.search_tokens`` from the raw keyword string.
+
+        Used when GEOmetadb is skipped — external sources still need the
+        normalised token set for description highlighting.
+        """
+        raw_tokens = {t.strip().lower() for t in self.search_tokens_raw.split(",") if t.strip()}
+        tokens = set()
+        for t in raw_tokens:
+            tokens.add(t)
+            cleaned = re.sub(r"[^a-z0-9\s]", "", t).strip()
+            if cleaned:
+                tokens.add(cleaned)
+        self.search_tokens = tokens
 
     # ────────────────────────────────────────────────────────────────
     def _do_search(self, conn):
@@ -1178,12 +1245,91 @@ class ExtractionThread(threading.Thread):
         n_gse = all_samples['series_id'].nunique() if 'series_id' in all_samples.columns else 0
         n_gpl = all_samples['gpl'].nunique() if 'gpl' in all_samples.columns else 0
         n_matched = all_samples['Token_Match'].sum()
-        self._log(f"[Step 1] OK Final: {len(all_samples):,} samples, "
+        self._log(f"[Step 1] OK Final (GEOmetadb): {len(all_samples):,} samples, "
                   f"{n_gse} experiments, {n_gpl} platform(s), "
                   f"{n_matched:,} samples with direct keyword match")
         self._log("PROGRESS: 70")
 
+        # Tag GEOmetadb rows with the source column so the review window can
+        # distinguish them from external-source hits merged below.
+        all_samples['Source'] = 'GEOmetadb'
+
         self.final_df = all_samples
+
+        # ── 8. Merge hits from additional sources (ARCHS4, CELLxGENE, Atlas) ──
+        extra = self.search_sources - {"geo"}
+        if extra:
+            self._merge_external_sources(extra)
+            self._log("PROGRESS: 90")
+
+    # ────────────────────────────────────────────────────────────────
+    def _merge_external_sources(self, sources):
+        """Query additional data sources and append their hits to final_df.
+
+        External hits are dataset-level (one row per GSE / dataset_id) since
+        sources like CELLxGENE and Expression Atlas don't expose GEO-style
+        per-sample metadata. The review window shows these alongside
+        GEOmetadb results with a "Source" column so users can tell them
+        apart. Step 1.5 download remains GEO-only.
+        """
+        try:
+            from genevariate.sources.discovery import (
+                search_sources as _search_sources, hits_to_dataframe)
+        except Exception as exc:
+            self._log(f"[Step 1] External sources module unavailable: {exc}")
+            return
+
+        self._log(f"[Step 1] Querying external sources: {sorted(sources)}")
+        try:
+            per_source = _search_sources(
+                self.search_tokens_raw, sources,
+                max_per_source=200, log=self._log,
+                subfilters=self.subfilters)
+        except Exception as exc:
+            self._log(f"[Step 1] External search failed: {exc}")
+            return
+
+        all_extra = []
+        for src_key, hits in per_source.items():
+            if not hits:
+                continue
+            df = hits_to_dataframe(hits)
+            all_extra.append(df)
+            # Register descriptions so the review-window detail pane shows
+            # something meaningful for non-GEO accessions.
+            for h in hits:
+                desc_lines = [f"source: {h.source}"]
+                if h.title:
+                    desc_lines.append(f"title: {h.title}")
+                if h.organism:
+                    desc_lines.append(f"organism: {h.organism}")
+                if h.platform:
+                    desc_lines.append(f"platform: {h.platform}")
+                if h.n_samples:
+                    label = "cells" if h.source == "CELLxGENE" else "samples"
+                    desc_lines.append(f"{label}: {h.n_samples:,}")
+                if h.summary:
+                    desc_lines.append(f"summary: {h.summary}")
+                if h.url:
+                    desc_lines.append(f"url: {h.url}")
+                self.gse_descriptions[h.accession] = "\n".join(desc_lines)
+                self.gse_keywords[h.accession] = list(h.matched)
+
+        if not all_extra:
+            self._log("[Step 1] No external hits.")
+            return
+
+        extra_df = pd.concat(all_extra, ignore_index=True)
+        if self.final_df is None or self.final_df.empty:
+            self.final_df = extra_df
+        else:
+            # Align columns before concat (external frames have fewer cols)
+            combined = pd.concat([self.final_df, extra_df],
+                                  ignore_index=True, sort=False)
+            self.final_df = combined
+
+        self._log(f"[Step 1] Merged {len(extra_df)} external hit(s) from "
+                  f"{extra_df['Source'].nunique()} source(s)")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1232,6 +1378,19 @@ class GSEReviewWindow(tk.Toplevel):
                              f"Keywords: {', '.join(sorted(self.search_tokens))}",
                   font=('Segoe UI', 11, 'bold')).pack(side=tk.LEFT)
 
+        # Mode selector — experiment-wise or sample-wise
+        mode_frame = ttk.Frame(hdr)
+        mode_frame.pack(side=tk.RIGHT)
+        ttk.Label(mode_frame, text="Selection:",
+                   font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 4))
+        self.selection_mode = tk.StringVar(value="experiment")
+        ttk.Radiobutton(mode_frame, text="Experiment-wise",
+                         variable=self.selection_mode, value="experiment",
+                         command=self._update_count).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(mode_frame, text="Sample-wise",
+                         variable=self.selection_mode, value="sample",
+                         command=self._update_count).pack(side=tk.LEFT, padx=2)
+
         # ── PanedWindow (left = tree, right = detail) ──
         pw = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         pw.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
@@ -1240,19 +1399,21 @@ class GSEReviewWindow(tk.Toplevel):
         left = ttk.Frame(pw)
         pw.add(left, weight=2)
 
-        cols = ("gse", "samples", "platforms", "matched_kw")
+        cols = ("gse", "source", "samples", "platforms", "matched_kw")
         self.tree = ttk.Treeview(left, columns=cols, show='tree headings',
                                   selectmode='browse', height=25)
         self.tree.heading('#0', text='✓')
-        self.tree.column('#0', width=35, stretch=False)
-        self.tree.heading('gse', text='GSE ID')
-        self.tree.column('gse', width=100)
-        self.tree.heading('samples', text='Samples')
-        self.tree.column('samples', width=70, anchor='e')
+        self.tree.column('#0', width=45, stretch=False)
+        self.tree.heading('gse', text='GSE / GSM')
+        self.tree.column('gse', width=150)
+        self.tree.heading('source', text='Source')
+        self.tree.column('source', width=110)
+        self.tree.heading('samples', text='Samples / Match')
+        self.tree.column('samples', width=90, anchor='e')
         self.tree.heading('platforms', text='Platform(s)')
         self.tree.column('platforms', width=90)
-        self.tree.heading('matched_kw', text='Matched Keywords')
-        self.tree.column('matched_kw', width=200)
+        self.tree.heading('matched_kw', text='Keywords / Title')
+        self.tree.column('matched_kw', width=220)
 
         sb = ttk.Scrollbar(left, command=self.tree.yview)
         self.tree.config(yscrollcommand=sb.set)
@@ -1264,48 +1425,82 @@ class GSEReviewWindow(tk.Toplevel):
 
         # Style tags
         self.tree.tag_configure('checked', foreground='#1B5E20')
+        self.tree.tag_configure('partial', foreground='#E67E22')
         self.tree.tag_configure('unchecked', foreground='#999999')
+        self.tree.tag_configure('gse_row', font=('Segoe UI', 10, 'bold'))
+        self.tree.tag_configure('gsm_row', font=('Segoe UI', 9))
 
-        # RIGHT: Detail text
+        # RIGHT: Structured detail card (scrollable)
         right = ttk.Frame(pw)
         pw.add(right, weight=3)
 
-        self.detail_text = tk.Text(right, wrap=tk.WORD, font=('Consolas', 9),
-                                    state='disabled', padx=8, pady=8)
-        dsb = ttk.Scrollbar(right, command=self.detail_text.yview)
-        self.detail_text.config(yscrollcommand=dsb.set)
-        self.detail_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._detail_canvas = tk.Canvas(right, highlightthickness=0,
+                                          background="#FFFFFF", bd=0)
+        dsb = ttk.Scrollbar(right, command=self._detail_canvas.yview)
+        self._detail_canvas.configure(yscrollcommand=dsb.set)
+        self._detail_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         dsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Tag for keyword highlighting
-        self.detail_text.tag_configure('keyword', foreground='red', font=('Consolas', 9, 'bold'))
-        self.detail_text.tag_configure('header', font=('Consolas', 10, 'bold'), foreground='#1565C0')
-        self.detail_text.tag_configure('sample_header', font=('Consolas', 9, 'bold'),
-                                        foreground='#6A1B9A')
+        self._detail_inner = tk.Frame(self._detail_canvas, bg="#FFFFFF")
+        self._detail_window_id = self._detail_canvas.create_window(
+            (0, 0), window=self._detail_inner, anchor='nw')
+
+        def _on_inner_config(event):
+            try:
+                self._detail_canvas.configure(
+                    scrollregion=self._detail_canvas.bbox('all'))
+            except Exception:
+                pass
+        self._detail_inner.bind('<Configure>', _on_inner_config)
+
+        def _on_canvas_config(event):
+            try:
+                self._detail_canvas.itemconfig(self._detail_window_id,
+                                                width=event.width)
+            except Exception:
+                pass
+        self._detail_canvas.bind('<Configure>', _on_canvas_config)
+
+        def _on_mwheel(event):
+            try:
+                delta = -1 * (event.delta // 120) if event.delta else 0
+                if delta == 0 and getattr(event, "num", 0) in (4, 5):
+                    delta = -1 if event.num == 4 else 1
+                self._detail_canvas.yview_scroll(int(delta), 'units')
+            except Exception:
+                pass
+        self._detail_canvas.bind('<MouseWheel>', _on_mwheel)
+        self._detail_canvas.bind('<Button-4>', _on_mwheel)
+        self._detail_canvas.bind('<Button-5>', _on_mwheel)
+
+        # Placeholder
+        tk.Label(self._detail_inner,
+                  text="← Select an experiment to see details",
+                  bg="#FFFFFF", fg="#999",
+                  font=('Segoe UI', 10, 'italic')
+                  ).pack(padx=16, pady=40)
 
         # ── Bottom buttons ──
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=8, pady=8)
 
-        tk.Button(btn_frame, text="✓ Select All", command=self._select_all,
-                  bg='#4CAF50', fg='white', font=('Segoe UI', 9, 'bold'),
-                  padx=10).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="✗ Deselect All", command=self._deselect_all,
-                  bg='#F44336', fg='white', font=('Segoe UI', 9, 'bold'),
-                  padx=10).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Select All", command=self._select_all,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Deselect All", command=self._deselect_all,
+                   style="Destructive.TButton").pack(side=tk.LEFT, padx=4)
 
         ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
 
         self._count_label = ttk.Label(btn_frame, text="", font=('Segoe UI', 10))
         self._count_label.pack(side=tk.LEFT, padx=8)
 
-        tk.Button(btn_frame, text="💾 Save Selected for Step 2", command=self._save_and_close,
-                  bg='#1976D2', fg='white', font=('Segoe UI', 10, 'bold'),
-                  padx=15, pady=4).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btn_frame, text="🤖 LLM Label Extraction →",
+                   command=self._go_to_llm,
+                   style="Primary.TButton").pack(side=tk.RIGHT, padx=4)
 
-        tk.Button(btn_frame, text="📊 Analyze on Platform →", command=self._analyze_on_platform,
-                  bg='#6A1B9A', fg='white', font=('Segoe UI', 10, 'bold'),
-                  padx=15, pady=4).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btn_frame, text="💾 Download Data…",
+                   command=self._download_data,
+                   style="Tool.TButton").pack(side=tk.RIGHT, padx=4)
 
     # ── Populate ───────────────────────────────────────────────────
     def _populate(self):
@@ -1313,140 +1508,365 @@ class GSEReviewWindow(tk.Toplevel):
         if 'series_id' not in df.columns:
             return
 
+        # GSM iid → parent GSE id lookup
+        self._gsm_parent = {}
+
+        gsm_col = 'GSM' if 'GSM' in df.columns else ('gsm' if 'gsm' in df.columns else None)
+
         for gse_id in sorted(df['series_id'].unique()):
             sub = df[df['series_id'] == gse_id]
             n = len(sub)
-            plats = ', '.join(sorted(sub['gpl'].dropna().unique())) if 'gpl' in sub.columns else '?'
+            plats = ', '.join(sorted(str(p) for p in sub['gpl'].dropna().unique())) if 'gpl' in sub.columns else '?'
             kws = self.gse_keywords.get(gse_id, [])
             kw_str = ', '.join(kws[:5])
             if len(kws) > 5:
                 kw_str += f' (+{len(kws)-5})'
 
-            self._checks[gse_id] = True  # all checked initially
-            iid = self.tree.insert('', tk.END, iid=gse_id,
-                                    text='[✓]',
-                                    values=(gse_id, f"{n:,}", plats, kw_str),
-                                    tags=('checked',))
+            # Source column
+            if 'Source' in sub.columns:
+                srcs = sorted(str(s) for s in sub['Source'].dropna().unique() if s)
+                src_str = ', '.join(srcs) if srcs else 'GEOmetadb'
+            else:
+                src_str = 'GEOmetadb'
+
+            # GSE (parent) row
+            self._checks[gse_id] = True
+            self.tree.insert('', tk.END, iid=gse_id,
+                              text='[✓]',
+                              values=(gse_id, src_str, f"{n:,}",
+                                      plats, kw_str),
+                              tags=('checked', 'gse_row'),
+                              open=False)
+
+            # GSM (child) rows
+            if gsm_col is None:
+                continue
+            for _, row in sub.iterrows():
+                gsm_raw = row.get(gsm_col, '')
+                gsm_id = str(gsm_raw).strip()
+                if not gsm_id:
+                    continue
+                iid = f"{gse_id}::{gsm_id}"
+                if self.tree.exists(iid):
+                    continue
+                matched = False
+                if 'Token_Match' in sub.columns:
+                    try:
+                        matched = bool(int(row.get('Token_Match', 0)))
+                    except Exception:
+                        matched = False
+                match_str = '✓ match' if matched else '·'
+                title_snip = str(row.get('title', '') or '').strip()[:90]
+                if not title_snip:
+                    title_snip = str(row.get('source_name_ch1', '') or '').strip()[:90]
+                gsm_plat = str(row.get('gpl', '') or '').strip()
+                row_src = str(row.get('Source', src_str) or src_str)
+
+                self._checks[iid] = True
+                self._gsm_parent[iid] = gse_id
+                self.tree.insert(gse_id, tk.END, iid=iid,
+                                  text='[✓]',
+                                  values=(gsm_id, row_src,
+                                          match_str, gsm_plat, title_snip),
+                                  tags=('checked', 'gsm_row'))
 
         self._update_count()
 
     # ── Tree interactions ──────────────────────────────────────────
     def _on_tree_click(self, event):
-        """Toggle checkbox on click in the #0 (checkbox) column."""
+        """Toggle checkbox only on the [✓] glyph — clicks elsewhere just select."""
         region = self.tree.identify_region(event.x, event.y)
-        if region == 'tree':  # clicked on the #0 column (tree text area)
-            iid = self.tree.identify_row(event.y)
-            if iid and iid in self._checks:
-                self._checks[iid] = not self._checks[iid]
-                if self._checks[iid]:
-                    self.tree.item(iid, text='[✓]', tags=('checked',))
-                else:
-                    self.tree.item(iid, text='[ ]', tags=('unchecked',))
-                self._update_count()
+        if region != 'tree':
+            return
+        # Skip the disclosure indicator (expand/collapse arrow) and padding —
+        # only the 'text' element (where "[✓]" is rendered) should toggle.
+        try:
+            elem = self.tree.identify_element(event.x, event.y) or ''
+        except Exception:
+            elem = ''
+        if 'text' not in elem.lower():
+            return
+        iid = self.tree.identify_row(event.y)
+        if iid and iid in self._checks:
+            self._set_check(iid, not self._checks[iid], cascade=True)
+            self._update_count()
+
+    def _set_check(self, iid, value, cascade=False):
+        """Set check state for iid; optionally cascade to children / parent."""
+        self._checks[iid] = bool(value)
+        is_gsm = iid in self._gsm_parent
+        row_tag = 'gsm_row' if is_gsm else 'gse_row'
+
+        if value:
+            self.tree.item(iid, text='[✓]', tags=('checked', row_tag))
+        else:
+            self.tree.item(iid, text='[ ]', tags=('unchecked', row_tag))
+
+        if not cascade:
+            return
+
+        # GSE toggle → cascade to all its GSM children
+        if not is_gsm:
+            for child in self.tree.get_children(iid):
+                self._set_check(child, value, cascade=False)
+            return
+
+        # GSM toggle → recompute parent state from siblings
+        parent = self._gsm_parent.get(iid)
+        if not parent:
+            return
+        siblings = self.tree.get_children(parent)
+        any_checked = any(self._checks.get(c, False) for c in siblings)
+        all_checked = all(self._checks.get(c, False) for c in siblings)
+        if all_checked:
+            self._checks[parent] = True
+            self.tree.item(parent, text='[✓]', tags=('checked', 'gse_row'))
+        elif any_checked:
+            self._checks[parent] = True
+            self.tree.item(parent, text='[▣]', tags=('partial', 'gse_row'))
+        else:
+            self._checks[parent] = False
+            self.tree.item(parent, text='[ ]', tags=('unchecked', 'gse_row'))
 
     def _on_tree_select(self, event):
-        """Show detail for selected experiment."""
+        """Show detail for selected row (GSM rows route to their parent GSE)."""
         sel = self.tree.selection()
         if not sel:
             return
-        gse_id = sel[0]
+        iid = sel[0]
+        gse_id = self._gsm_parent.get(iid, iid)
         self._show_detail(gse_id)
 
     def _show_detail(self, gse_id):
-        """Render GSE + sample details with red keyword highlighting."""
-        self.detail_text.config(state='normal')
-        self.detail_text.delete('1.0', tk.END)
+        """Render GSE + sample details as structured cards."""
+        # Clear prior content
+        for w in self._detail_inner.winfo_children():
+            w.destroy()
 
-        # ── GSE-level description ──
-        self.detail_text.insert(tk.END, f"═══ {gse_id} ═══\n", 'header')
-
-        desc = self.gse_descriptions.get(gse_id, "No description available")
-        self._insert_highlighted(desc + "\n\n")
-
-        # ── Sample summary ──
         df = self.results_df
         sub = df[df['series_id'] == gse_id] if 'series_id' in df.columns else pd.DataFrame()
+
+        # ── Gather data ──
+        n_total = len(sub)
+        n_matched = int(sub['Token_Match'].sum()) if 'Token_Match' in sub.columns else 0
+        plats = sorted(str(s) for s in sub['gpl'].dropna().unique()) if 'gpl' in sub.columns else []
+        plat_str = ', '.join(plats) if plats else '—'
+
+        orgs = []
+        for col in ('organism_ch1', 'Organism', 'organism'):
+            if col in sub.columns:
+                orgs = sorted(str(s) for s in sub[col].dropna().unique() if str(s).strip())
+                if orgs:
+                    break
+        org_str = ', '.join(orgs) if orgs else '—'
+
+        srcs = []
+        if 'Source' in sub.columns:
+            srcs = sorted(str(s) for s in sub['Source'].dropna().unique() if str(s).strip())
+        src_str = ', '.join(srcs) if srcs else 'GEOmetadb'
+
+        desc = self.gse_descriptions.get(gse_id, "") or ""
+        matched_kws = self.gse_keywords.get(gse_id, []) or []
+        url = self._compute_source_url(gse_id, src_str)
+
+        # ── HEADER CARD ──
+        head = tk.Frame(self._detail_inner, bg=AERO["panel_bot"],
+                         highlightbackground=AERO["border"], highlightthickness=1)
+        head.pack(fill=tk.X, padx=12, pady=(12, 8))
+
+        tk.Label(head, text=str(gse_id),
+                  font=('Segoe UI', 16, 'bold'),
+                  bg=AERO["panel_bot"], fg=AERO["accent_dark"],
+                  anchor='w').pack(anchor='w', padx=14, pady=(10, 0))
+
+        title_line = desc.split('\n', 1)[0][:260] if desc else "(no title available)"
+        tk.Label(head, text=title_line,
+                  font=('Segoe UI', 10),
+                  bg=AERO["panel_bot"], fg=AERO["text"],
+                  wraplength=540, justify='left', anchor='w'
+                  ).pack(anchor='w', padx=14, pady=(2, 6))
+
+        if url:
+            link = tk.Label(head, text=f"🔗 {url}",
+                             font=('Segoe UI', 9, 'underline'),
+                             bg=AERO["panel_bot"], fg=AERO["accent"],
+                             cursor='hand2', anchor='w')
+            link.pack(anchor='w', padx=14, pady=(0, 10))
+            link.bind('<Button-1>', lambda e, u=url: self._open_url(u))
+
+        # ── STAT BADGES ──
+        stats = tk.Frame(self._detail_inner, bg="#FFFFFF")
+        stats.pack(fill=tk.X, padx=12, pady=4)
+        for label, val, color in (
+            ("Source",   src_str,                        "#1E90E0"),
+            ("Organism", org_str,                        "#4CAF50"),
+            ("Samples",  f"{n_matched:,} / {n_total:,}", "#E67E22"),
+            ("Platform", plat_str,                       "#7E57C2"),
+        ):
+            self._make_badge(stats, label, val, color).pack(
+                side=tk.LEFT, padx=3, fill=tk.X, expand=True)
+
+        # ── MATCHED KEYWORD PILLS ──
+        if matched_kws:
+            kwrow = tk.Frame(self._detail_inner, bg="#FFFFFF")
+            kwrow.pack(fill=tk.X, padx=12, pady=(10, 2))
+            tk.Label(kwrow, text="Matched keywords",
+                      font=('Segoe UI', 9, 'bold'),
+                      bg="#FFFFFF", fg=AERO["muted"],
+                      anchor='w').pack(anchor='w')
+            pill_wrap = tk.Frame(kwrow, bg="#FFFFFF")
+            pill_wrap.pack(fill=tk.X, pady=(2, 0))
+            for kw in matched_kws[:16]:
+                tk.Label(pill_wrap, text=str(kw),
+                          bg="#FFE8E6", fg="#C0392B",
+                          font=('Segoe UI', 9, 'bold'),
+                          padx=8, pady=2,
+                          borderwidth=1, relief='solid'
+                          ).pack(side=tk.LEFT, padx=2, pady=2)
+
+        # ── SUMMARY CARD ──
+        if desc:
+            sc = tk.LabelFrame(self._detail_inner, text=' Summary ',
+                                bg="#FFFFFF", fg=AERO["text"],
+                                font=('Segoe UI', 9, 'bold'),
+                                bd=1, relief='solid', padx=4, pady=2)
+            sc.pack(fill=tk.X, padx=12, pady=(10, 6))
+            self._render_highlighted(sc, desc, max_height=10)
+
         if sub.empty:
-            self.detail_text.config(state='disabled')
             return
 
-        n_total = len(sub)
-        n_matched = sub['Token_Match'].sum() if 'Token_Match' in sub.columns else 0
-
-        self.detail_text.insert(tk.END,
-            f"Samples: {n_total:,} total, {n_matched:,} with direct keyword match\n",
-            'sample_header')
-
-        if 'gpl' in sub.columns:
-            plat_counts = sub['gpl'].value_counts()
-            for plat, cnt in plat_counts.items():
-                self.detail_text.insert(tk.END, f"  Platform {plat}: {cnt:,} samples\n")
-
-        # ── Show sample-level details for MATCHED samples (up to 30) ──
+        # ── MATCHED SAMPLES ──
         if 'Token_Match' in sub.columns:
             matched_samples = sub[sub['Token_Match'] == 1]
         else:
             matched_samples = sub.head(10)
 
         if not matched_samples.empty:
-            self.detail_text.insert(tk.END,
-                f"\n─── Matched Samples (showing {min(30, len(matched_samples))} "
-                f"of {len(matched_samples):,}) ───\n", 'sample_header')
+            sec_hdr = tk.Frame(self._detail_inner, bg="#FFFFFF")
+            sec_hdr.pack(fill=tk.X, padx=12, pady=(10, 0))
+            tk.Label(sec_hdr,
+                      text=f"🧪  Matched Samples   "
+                           f"({min(30, len(matched_samples))} of {len(matched_samples):,})",
+                      bg="#FFFFFF", fg=AERO["accent_dark"],
+                      font=('Segoe UI', 10, 'bold'), anchor='w'
+                      ).pack(anchor='w')
 
             gsm_col = 'GSM' if 'GSM' in matched_samples.columns else 'gsm'
             for _, row in matched_samples.head(30).iterrows():
                 gsm_id = row.get(gsm_col, '?')
-                self.detail_text.insert(tk.END, f"\n  {gsm_id}:\n", 'sample_header')
+                self._make_sample_card(gsm_id, row).pack(
+                    fill=tk.X, padx=12, pady=3)
 
-                # Use pre-built GSM description if available
-                gsm_desc = self.gsm_descriptions.get(gsm_id, None)
-                if gsm_desc is None:
-                    gsm_desc = self.gsm_descriptions.get(str(gsm_id).upper(), None)
-                if gsm_desc:
-                    for line in gsm_desc.split('\n'):
-                        self.detail_text.insert(tk.END, f"    ")
-                        self._insert_highlighted(line + "\n")
-                else:
-                    # Fallback: show available columns
-                    for c in ['title', 'source_name_ch1', 'characteristics_ch1']:
-                        val = row.get(c, None)
-                        if pd.notna(val) and str(val).strip():
-                            self.detail_text.insert(tk.END, f"    {c}: ")
-                            self._insert_highlighted(str(val).strip() + "\n")
-
-        # Show a few NON-matched samples too for context
+        # ── OTHER SAMPLES (context) ──
         if 'Token_Match' in sub.columns:
             non_matched = sub[sub['Token_Match'] == 0]
             if not non_matched.empty:
-                self.detail_text.insert(tk.END,
-                    f"\n─── Other Samples (showing {min(5, len(non_matched))} "
-                    f"of {len(non_matched):,}) ───\n", 'sample_header')
+                sec_hdr = tk.Frame(self._detail_inner, bg="#FFFFFF")
+                sec_hdr.pack(fill=tk.X, padx=12, pady=(10, 0))
+                tk.Label(sec_hdr,
+                          text=f"Other Samples   "
+                               f"({min(5, len(non_matched))} of {len(non_matched):,})",
+                          bg="#FFFFFF", fg=AERO["muted"],
+                          font=('Segoe UI', 9, 'bold'), anchor='w'
+                          ).pack(anchor='w')
                 for _, row in non_matched.head(5).iterrows():
                     gsm_id = row.get('GSM', row.get('gsm', '?'))
                     title = row.get('title', 'N/A')
                     src = row.get('source_name_ch1', '')
-                    line = f"  {gsm_id}: {title}"
-                    if src:
-                        line += f" | {src}"
-                    self.detail_text.insert(tk.END, line + "\n")
+                    line_text = f"  {gsm_id}: {str(title)[:140]}"
+                    if pd.notna(src) and str(src).strip():
+                        line_text += f" | {str(src)[:80]}"
+                    tk.Label(self._detail_inner, text=line_text,
+                              bg="#FFFFFF", fg=AERO["muted"],
+                              font=('Segoe UI', 9),
+                              anchor='w', justify='left',
+                              wraplength=560
+                              ).pack(fill=tk.X, padx=16, pady=1, anchor='w')
 
-        self.detail_text.config(state='disabled')
+        # Reset scroll
+        try:
+            self._detail_canvas.update_idletasks()
+            self._detail_canvas.yview_moveto(0)
+        except Exception:
+            pass
 
-    def _insert_highlighted(self, text):
-        """Insert text with search tokens highlighted in red.
-        Matching is case-insensitive and symbol-tolerant."""
+    # ── Card-render helpers ─────────────────────────────────────────
+    def _make_badge(self, parent, label, value, color):
+        """Colored stat badge: small coloured label + bold value."""
+        f = tk.Frame(parent, bg="#FFFFFF",
+                      highlightbackground=color, highlightthickness=2, bd=0)
+        tk.Label(f, text=str(label).upper(),
+                  bg="#FFFFFF", fg=color,
+                  font=('Segoe UI', 8, 'bold'),
+                  anchor='w').pack(anchor='w', padx=8, pady=(4, 0))
+        tk.Label(f, text=(str(value) if value else "—"),
+                  bg="#FFFFFF", fg=AERO["text"],
+                  font=('Segoe UI', 10, 'bold'),
+                  wraplength=160, justify='left',
+                  anchor='w').pack(anchor='w', padx=8, pady=(0, 4))
+        return f
+
+    def _make_sample_card(self, gsm_id, row):
+        """One matched-sample card: GSM id + wrapped description with kw pills."""
+        card = tk.Frame(self._detail_inner, bg=AERO["glass_hilite"],
+                         highlightbackground=AERO["border_soft"],
+                         highlightthickness=1)
+        top = tk.Frame(card, bg=AERO["glass_hilite"])
+        top.pack(fill=tk.X, padx=8, pady=(6, 2))
+        tk.Label(top, text=str(gsm_id), bg=AERO["glass_hilite"],
+                  fg=AERO["accent_dark"],
+                  font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT)
+
+        gsm_desc = (self.gsm_descriptions.get(gsm_id)
+                    or self.gsm_descriptions.get(str(gsm_id).upper()))
+        if gsm_desc:
+            body_text = gsm_desc
+        else:
+            parts = []
+            for c in ('title', 'source_name_ch1', 'characteristics_ch1'):
+                val = row.get(c, None)
+                if pd.notna(val) and str(val).strip():
+                    parts.append(f"{c}: {str(val).strip()}")
+            body_text = '\n'.join(parts)
+
+        if body_text:
+            self._render_highlighted(card, body_text, max_height=8,
+                                      bg=AERO["glass_hilite"],
+                                      pad=(8, 0, 8, 6))
+        return card
+
+    def _render_highlighted(self, parent, text, *, max_height=10,
+                             bg="#FFFFFF", pad=(6, 2, 6, 4)):
+        """Borderless tk.Text showing `text` with search tokens in red pills."""
+        t = tk.Text(parent, wrap='word',
+                     bg=bg, fg=AERO["text"],
+                     relief='flat', borderwidth=0, highlightthickness=0,
+                     font=('Segoe UI', 9), height=1, cursor='arrow')
+        t.tag_configure('keyword', foreground='#C0392B',
+                         font=('Segoe UI', 9, 'bold'),
+                         background='#FFE8E6')
+        self._insert_with_highlights(t, str(text))
+        # Size to content
+        t.update_idletasks()
+        try:
+            lines = int(t.index('end-1c').split('.')[0])
+        except Exception:
+            lines = 1
+        t.configure(height=min(max_height, max(1, lines)))
+        t.config(state='disabled')
+        padl, padt, padr, padb = pad
+        t.pack(fill=tk.X, padx=(padl, padr), pady=(padt, padb))
+        return t
+
+    def _insert_with_highlights(self, widget, text):
+        """Insert `text` into a tk.Text with search tokens tagged 'keyword'."""
         if not self.search_tokens:
-            self.detail_text.insert(tk.END, text)
+            widget.insert(tk.END, text)
             return
-
         text_lower = text.lower()
-        # Also build a cleaned version for fuzzy matching
-        # But we need to map cleaned positions back to original positions
-        # Simpler approach: for each token, try matching in both raw and cleaned text
-
-        highlights = []  # [(start, end), ...]
+        highlights = []
         for tok in self.search_tokens:
-            # Direct substring match (handles "alzheimer" in "Alzheimer's Disease")
             start = 0
             while True:
                 idx = text_lower.find(tok, start)
@@ -1454,34 +1874,26 @@ class GSEReviewWindow(tk.Toplevel):
                     break
                 highlights.append((idx, idx + len(tok)))
                 start = idx + 1
-
-            # Fuzzy match: strip symbols from text and find token, then map back
-            # This handles "alzheimers" matching "Alzheimer's"
             cleaned_tok = re.sub(r"[^a-z0-9\s]", "", tok)
             if cleaned_tok and cleaned_tok != tok:
-                # Build position map: cleaned_pos -> original_pos
-                orig_positions = []  # for each char in cleaned text, its position in original
+                orig_positions = []
                 for i, ch in enumerate(text_lower):
                     if re.match(r"[a-z0-9\s]", ch):
                         orig_positions.append(i)
                 cleaned_text = re.sub(r"[^a-z0-9\s]", "", text_lower)
-
                 start = 0
                 while True:
                     idx = cleaned_text.find(cleaned_tok, start)
                     if idx == -1:
                         break
-                    if idx < len(orig_positions) and idx + len(cleaned_tok) - 1 < len(orig_positions):
+                    if idx + len(cleaned_tok) - 1 < len(orig_positions):
                         orig_start = orig_positions[idx]
                         orig_end = orig_positions[idx + len(cleaned_tok) - 1] + 1
                         highlights.append((orig_start, orig_end))
                     start = idx + 1
-
         if not highlights:
-            self.detail_text.insert(tk.END, text)
+            widget.insert(tk.END, text)
             return
-
-        # Sort and merge overlapping ranges
         highlights.sort()
         merged = [highlights[0]]
         for s, e in highlights[1:]:
@@ -1489,163 +1901,261 @@ class GSEReviewWindow(tk.Toplevel):
                 merged[-1] = (merged[-1][0], max(merged[-1][1], e))
             else:
                 merged.append((s, e))
-
-        # Insert text with tags
         pos = 0
         for s, e in merged:
             if pos < s:
-                self.detail_text.insert(tk.END, text[pos:s])
-            self.detail_text.insert(tk.END, text[s:e], 'keyword')
+                widget.insert(tk.END, text[pos:s])
+            widget.insert(tk.END, text[s:e], 'keyword')
             pos = e
         if pos < len(text):
-            self.detail_text.insert(tk.END, text[pos:])
+            widget.insert(tk.END, text[pos:])
 
-    # ── Button actions ─────────────────────────────────────────────
+    def _compute_source_url(self, gse_id, src_str):
+        s = (src_str or "").lower()
+        gid = str(gse_id).strip()
+        if not gid:
+            return ""
+        if "cellxgene" in s or "cxg" in s:
+            return f"https://cellxgene.cziscience.com/collections?search={gid}"
+        if "atlas" in s or "gxa" in s or gid.startswith("E-"):
+            return f"https://www.ebi.ac.uk/gxa/experiments/{gid}"
+        if "archs4" in s or "geo" in s or gid.startswith("GSE"):
+            return f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gid}"
+        return ""
+
+    def _open_url(self, url):
+        try:
+            import webbrowser
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
+
+    # ── Selection helpers ──────────────────────────────────────────
     def _select_all(self):
-        for iid in self._checks:
+        for iid in list(self._checks.keys()):
             self._checks[iid] = True
-            self.tree.item(iid, text='[✓]', tags=('checked',))
+            is_gsm = iid in self._gsm_parent
+            self.tree.item(iid, text='[✓]',
+                           tags=('checked', 'gsm_row' if is_gsm else 'gse_row'))
         self._update_count()
 
     def _deselect_all(self):
-        for iid in self._checks:
+        for iid in list(self._checks.keys()):
             self._checks[iid] = False
-            self.tree.item(iid, text='[ ]', tags=('unchecked',))
+            is_gsm = iid in self._gsm_parent
+            self.tree.item(iid, text='[ ]',
+                           tags=('unchecked', 'gsm_row' if is_gsm else 'gse_row'))
         self._update_count()
 
-    def _update_count(self):
-        checked = [gid for gid, v in self._checks.items() if v]
-        n_sel = len(checked)
-        n_tot = len(self._checks)
-        n_samples = 0
-        if 'series_id' in self.results_df.columns:
-            n_samples = len(self.results_df[
-                self.results_df['series_id'].isin(checked)])
-        self._count_label.config(
-            text=f"{n_sel}/{n_tot} experiments selected  •  {n_samples:,} samples")
+    def _collect_selection_df(self):
+        """Return filtered results_df based on current mode + checks."""
+        df = self.results_df
+        if 'series_id' not in df.columns:
+            return df.iloc[0:0]
+        mode = (self.selection_mode.get()
+                if hasattr(self, 'selection_mode') else 'experiment')
+        if mode == 'experiment':
+            gse_ids = [k for k, v in self._checks.items()
+                        if v and k not in self._gsm_parent]
+            return df[df['series_id'].isin(gse_ids)]
+        # Sample-wise: only explicitly checked GSM rows
+        gsm_ids = set()
+        for iid, v in self._checks.items():
+            if v and iid in self._gsm_parent:
+                gsm_ids.add(iid.split('::', 1)[1])
+        gcol = 'GSM' if 'GSM' in df.columns else ('gsm' if 'gsm' in df.columns else None)
+        if gcol is None:
+            return df.iloc[0:0]
+        return df[df[gcol].astype(str).isin(gsm_ids)]
 
-    def _save_and_close(self):
-        selected = [gid for gid, v in self._checks.items() if v]
-        if not selected:
+    def _update_count(self):
+        mode = (self.selection_mode.get()
+                if hasattr(self, 'selection_mode') else 'experiment')
+        sel_df = self._collect_selection_df()
+        n_samples = len(sel_df)
+        n_gse = (sel_df['series_id'].nunique()
+                 if 'series_id' in sel_df.columns else 0)
+        mode_label = "Experiment-wise" if mode == 'experiment' else "Sample-wise"
+        self._count_label.config(
+            text=f"Mode: {mode_label}  •  {n_gse} experiment(s)  •  "
+                 f"{n_samples:,} sample(s)")
+
+    # ── Primary actions ────────────────────────────────────────────
+    def _commit_selection_to_app(self, sel_df):
+        """Push the filtered selection into app state so downstream steps use it."""
+        if 'series_id' in sel_df.columns:
+            gse_list = sorted(sel_df['series_id'].dropna().astype(str).unique())
+        else:
+            gse_list = []
+        self.app.step1_results_df = sel_df.copy()
+        self.app.gse_to_keep_for_step2 = gse_list
+        return gse_list
+
+    def _go_to_llm(self):
+        """Save selection → LLM label extraction (existing Step 2 flow)."""
+        sel_df = self._collect_selection_df()
+        if sel_df.empty:
             messagebox.showwarning("No Selection",
-                                   "Please select at least one experiment.",
-                                   parent=self)
+                                    "Please select at least one experiment or sample.",
+                                    parent=self)
             return
 
-        self.app.gse_to_keep_for_step2 = selected
-
-        # Filter results to selected GSEs only
-        if 'series_id' in self.results_df.columns:
-            kept = self.results_df[self.results_df['series_id'].isin(selected)]
-        else:
-            kept = self.results_df
-        total_samples = len(kept)
+        gse_list = self._commit_selection_to_app(sel_df)
+        total_samples = len(sel_df)
+        mode = (self.selection_mode.get()
+                if hasattr(self, 'selection_mode') else 'experiment')
 
         self.app.enqueue_log(
-            f"[Step 1.5] OK Saved {len(selected)} experiment(s) "
-            f"({total_samples:,} samples) for Step 2")
+            f"[Step 1.5] OK Saved {len(gse_list)} experiment(s) "
+            f"({total_samples:,} samples, mode={mode}) → LLM extraction")
 
-        # Also populate the listbox in Step 1.5
-        self.app.gse_listbox.delete(0, tk.END)
-        for gse_id in sorted(selected):
-            count = len(kept[kept['series_id'] == gse_id]) if 'series_id' in kept.columns else 0
-            desc = self.app.step1_gse_descriptions.get(gse_id, "")
-            if len(desc) > 80:
-                desc = desc[:77] + "..."
-            kws = self.app.step1_gse_keywords.get(gse_id, [])
-            kw_str = ', '.join(kws[:3]) or 'N/A'
-            self.app.gse_listbox.insert(
-                tk.END, f"{gse_id} ({count:,} samples) - {desc} | Keywords: {kw_str}")
-
-        self.app.gse_listbox.select_set(0, tk.END)
-        self.app.gse_frame.pack(fill=tk.X, padx=5, pady=5,
-                                 after=self.app.step1_frame)
-
-        self.app.step2_status_label.config(
-            text=f"OK Ready: {len(selected)} experiment(s) ({total_samples:,} samples)",
-            foreground="green")
+        # Populate Step 1.5 listbox
+        try:
+            self.app.gse_listbox.delete(0, tk.END)
+            for gse_id in gse_list:
+                count = len(sel_df[sel_df['series_id'] == gse_id]) if 'series_id' in sel_df.columns else 0
+                desc = self.app.step1_gse_descriptions.get(gse_id, "")
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
+                kws = self.app.step1_gse_keywords.get(gse_id, [])
+                kw_str = ', '.join(kws[:3]) or 'N/A'
+                self.app.gse_listbox.insert(
+                    tk.END,
+                    f"{gse_id} ({count:,} samples) - {desc} | Keywords: {kw_str}")
+            self.app.gse_listbox.select_set(0, tk.END)
+            self.app.gse_frame.pack(fill=tk.X, padx=5, pady=5,
+                                     after=self.app.step1_frame)
+            self.app.step2_status_label.config(
+                text=f"OK Ready: {len(gse_list)} experiment(s) ({total_samples:,} samples)",
+                foreground="green")
+            self.app._set_step_status(self.app.step1_frame, self.app._step1_title, "done")
+            self.app._set_step_status(self.app.gse_frame, self.app._step15_title, "done")
+        except Exception:
+            pass
 
         messagebox.showinfo(
-            "Saved",
-            f"Saved {len(selected)} experiment(s) with {total_samples:,} samples.\n\n"
-            f"You can now proceed to Step 2.",
+            "Ready for LLM Extraction",
+            f"Selected {len(gse_list)} experiment(s) • {total_samples:,} samples.\n\n"
+            f"Proceed to LLM Label Extraction in the main window.",
             parent=self)
-
         self.destroy()
 
-    def _analyze_on_platform(self):
-        """Check selected experiments' platforms, guide user to load & analyze."""
-        selected = [gid for gid, v in self._checks.items() if v]
-        if not selected:
+    def _download_data(self):
+        """Open a dialog to download metadata / expression data for selection."""
+        sel_df = self._collect_selection_df()
+        if sel_df.empty:
             messagebox.showwarning("No Selection",
-                                   "Please select at least one experiment first.",
-                                   parent=self)
+                                    "Please select at least one experiment or sample first.",
+                                    parent=self)
             return
 
-        # Find which platforms the selected experiments use
-        df = self.results_df
-        if 'series_id' not in df.columns or 'gpl' not in df.columns:
-            messagebox.showerror("Data Error",
-                                 "Cannot determine platforms from the results.",
-                                 parent=self)
-            return
+        dlg = tk.Toplevel(self)
+        dlg.title("Download Data")
+        dlg.transient(self)
+        dlg.geometry("460x320")
+        dlg.configure(bg="#FFFFFF")
 
-        sub = df[df['series_id'].isin(selected)]
-        needed_gpls = set(sub['gpl'].dropna().astype(str).str.strip().str.upper().unique())
-        if not needed_gpls:
-            messagebox.showwarning("No Platforms",
-                                   "Could not determine platforms for selected experiments.",
-                                   parent=self)
-            return
+        gse_list = sorted(sel_df['series_id'].dropna().astype(str).unique()) \
+            if 'series_id' in sel_df.columns else []
 
-        # Check which are loaded in the app
-        missing = set()
-        for gpl in needed_gpls:
-            found = any(gpl.upper() in lk.upper() for lk in self.app.gpl_datasets.keys())
-            if not found:
-                missing.add(gpl)
+        tk.Label(dlg,
+                  text=f"Download for {len(gse_list)} experiment(s)  •  "
+                       f"{len(sel_df):,} sample(s)",
+                  bg="#FFFFFF", fg=AERO["accent_dark"],
+                  font=('Segoe UI', 11, 'bold')
+                  ).pack(anchor='w', padx=14, pady=(14, 6))
 
-        if missing:
-            missing_str = ', '.join(sorted(missing))
-            loaded_str = ', '.join(sorted(self.app.gpl_datasets.keys())) or '(none)'
-            n_samples_missing = len(sub[sub['gpl'].astype(str).str.upper().isin(
-                {m.upper() for m in missing})])
+        opt_meta = tk.BooleanVar(value=True)
+        opt_expr = tk.BooleanVar(value=False)
+        opt_gpl  = tk.BooleanVar(value=False)
 
-            messagebox.showwarning(
-                "Platform(s) Not Loaded",
-                f"The selected experiments require platform(s) not yet loaded:\n\n"
-                f"  NEEDED:  {missing_str}\n"
-                f"  LOADED:  {loaded_str}\n\n"
-                f"  {n_samples_missing:,} samples on unloaded platform(s).\n\n"
-                f"Please load the required platform(s) first:\n"
-                f"  1. Use the platform buttons in the main window\n"
-                f"     or 'Download from GEO' to fetch the data\n"
-                f"  2. Then come back here and click this button again\n\n"
-                f"Platform files contain the gene expression values\n"
-                f"needed for distribution analysis.",
-                parent=self
-            )
-            return
+        body = ttk.Frame(dlg)
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=4)
+        ttk.Checkbutton(body,
+                         text="Sample metadata (CSV, with matched keywords)",
+                         variable=opt_meta).pack(anchor='w', pady=3)
+        ttk.Checkbutton(body,
+                         text="Gene expression matrix (via GEO series / platform downloader)",
+                         variable=opt_expr).pack(anchor='w', pady=3)
+        ttk.Checkbutton(body,
+                         text="Platform annotation (GPL)",
+                         variable=opt_gpl).pack(anchor='w', pady=3)
 
-        # All platforms loaded — save selection and notify
-        self._save_and_close()
+        ttk.Separator(dlg).pack(fill=tk.X, padx=14, pady=8)
 
-        self.app.enqueue_log(
-            f"[Step 1] All platforms ready ({', '.join(sorted(needed_gpls))}). "
-            f"Use Gene Explorer (Ctrl+G).")
+        btns = ttk.Frame(dlg)
+        btns.pack(fill=tk.X, padx=14, pady=(0, 12))
 
-        messagebox.showinfo(
-            "Ready to Analyze",
-            f"All required platforms are loaded!\n\n"
-            f"  Platforms: {', '.join(sorted(needed_gpls))}\n"
-            f"  Experiments: {len(selected)}\n"
-            f"  Samples: {len(sub):,}\n\n"
-            f"Next steps:\n"
-            f"  • Labels auto-integrate with expression data\n"
-            f"  • Gene Distribution Explorer (Ctrl+G)\n"
-            f"  • Compare Regions after selecting ranges",
-            parent=self.app
-        )
+        def _do_download():
+            picks = []
+            if opt_meta.get(): picks.append('meta')
+            if opt_expr.get(): picks.append('expr')
+            if opt_gpl.get():  picks.append('gpl')
+            if not picks:
+                messagebox.showwarning("Nothing selected",
+                                        "Please tick at least one data type.",
+                                        parent=dlg)
+                return
+            dlg.destroy()
+            self._run_downloads(sel_df, gse_list, picks)
+
+        ttk.Button(btns, text="Cancel",
+                   command=dlg.destroy,
+                   style="Secondary.TButton").pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btns, text="Download",
+                   command=_do_download,
+                   style="Primary.TButton").pack(side=tk.RIGHT, padx=4)
+
+    def _run_downloads(self, sel_df, gse_list, picks):
+        """Execute the download picks: metadata CSV + optional expression / GPL."""
+        import os
+        from tkinter import filedialog
+
+        if 'meta' in picks:
+            out = filedialog.asksaveasfilename(
+                parent=self,
+                title="Save sample metadata",
+                defaultextension=".csv",
+                initialfile=f"step1_selection_{len(gse_list)}gse_{len(sel_df)}gsm.csv",
+                filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
+            if out:
+                try:
+                    sel_df.to_csv(out, index=False)
+                    self.app.enqueue_log(
+                        f"[Download] OK Metadata written: {out}  "
+                        f"({len(sel_df):,} rows)")
+                except Exception as exc:
+                    messagebox.showerror("Save failed",
+                                          f"Could not write CSV:\n{exc}",
+                                          parent=self)
+
+        if 'expr' in picks:
+            # Stage selection for app, then trigger expression downloader.
+            self._commit_selection_to_app(sel_df)
+            try:
+                self.app.enqueue_log(
+                    f"[Download] → Launching expression downloader for "
+                    f"{len(gse_list)} experiment(s)…")
+                self.app._download_selected_expression()
+            except AttributeError:
+                messagebox.showinfo(
+                    "Expression download",
+                    "Selection staged. Use the main window's "
+                    "'Download Expression' / 'Download Platform' controls "
+                    "to fetch matrices.",
+                    parent=self)
+
+        if 'gpl' in picks:
+            try:
+                self._commit_selection_to_app(sel_df)
+                self.app._open_gpl_downloader_window()
+                self.app.enqueue_log(
+                    "[Download] → Opened platform (GPL) downloader window.")
+            except AttributeError:
+                messagebox.showinfo(
+                    "Platform download",
+                    "Use the main window's 'Download Platform' button.",
+                    parent=self)
 
 class LabelingThread(threading.Thread):
     """Thread that runs LLM extraction for a batch of samples."""
@@ -1888,9 +2398,9 @@ class MultiLabelQueryDialog:
         # Add row button
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill=tk.X, padx=15, pady=5)
-        tk.Button(btn_row, text="+ Add Criterion", command=lambda: [_add_row(), _bind_updates()],
-                  bg="#43A047", fg="white", font=('Segoe UI', 9, 'bold'),
-                  padx=10, cursor="hand2").pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="+ Add Criterion",
+                   command=lambda: [_add_row(), _bind_updates()],
+                   style="Add.TButton").pack(side=tk.LEFT)
 
         # Query name
         name_frame = ttk.Frame(dlg)
@@ -8707,6 +9217,678 @@ class CrossPlatformAnalysisWindow(tk.Toplevel):
         self.app.enqueue_log(f"[XPlat] Reports exported to {folder}")
 
 
+class _UIAnimator:
+    """Lightweight animation helpers for Tk/ttk widgets.
+
+    All animation callbacks go through root.after() on the UI thread, so it's
+    safe to start/stop from background threads via self.root.after(0, ...).
+
+    Provides:
+      - spinner(label, base_text):       cycling braille glyph + base text
+      - pulse_bar(progressbar):          shimmering color pulse while busy
+      - smooth_to(progressbar, target):  interpolated value change ("liquid")
+      - fade_color(widget, a, b):        color cross-fade for status labels
+      - stop(widget) / stop_all()
+    """
+
+    # Smooth "dots" animation using braille patterns (looks like a liquid spinner)
+    SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    # Alternate: rotating arc for smaller spaces
+    ORBIT_FRAMES = ['◐', '◓', '◑', '◒']
+    # Pulse palette — shades of green for "working" bar
+    PULSE_GREENS = ['#4CAF50', '#66BB6A', '#81C784', '#66BB6A']
+    PULSE_BLUES  = ['#1976D2', '#42A5F5', '#64B5F6', '#42A5F5']
+
+    def __init__(self, root):
+        self.root = root
+        self._anim = {}  # widget-id -> state dict
+
+    # ---------- core plumbing ----------
+    def _cancel(self, key):
+        st = self._anim.pop(key, None)
+        if not st:
+            return
+        st['running'] = False
+        job = st.get('job')
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+
+    def _schedule(self, key, state, fn, interval_ms):
+        if not state.get('running'):
+            return
+        try:
+            state['job'] = self.root.after(interval_ms, fn)
+        except Exception:
+            state['running'] = False
+
+    # ---------- spinner on status label ----------
+    def spinner(self, label, base_text, interval_ms=80, frames=None, color=None):
+        """Cycle a spinner glyph in front of base_text on a label.
+        Call .stop(label) (or update_spinner_text) when the task finishes.
+        """
+        frames = frames or self.SPINNER_FRAMES
+        key = id(label)
+        self._cancel(key)
+        state = {'running': True, 'i': 0, 'base': base_text,
+                 'frames': frames, 'color': color}
+        self._anim[key] = state
+
+        def tick():
+            if not state['running']:
+                return
+            try:
+                if not label.winfo_exists():
+                    state['running'] = False
+                    return
+                glyph = state['frames'][state['i'] % len(state['frames'])]
+                cfg = {'text': f"{glyph}  {state['base']}"}
+                if state['color'] is not None:
+                    cfg['foreground'] = state['color']
+                try:
+                    label.config(**cfg)
+                except tk.TclError:
+                    state['running'] = False
+                    return
+                state['i'] += 1
+                self._schedule(key, state, tick, interval_ms)
+            except Exception:
+                state['running'] = False
+
+        tick()
+
+    def update_spinner_text(self, label, new_base_text):
+        """Update the base text of a currently-animated spinner label."""
+        key = id(label)
+        st = self._anim.get(key)
+        if st:
+            st['base'] = new_base_text
+
+    # ---------- progress bar pulse (liquid shimmer) ----------
+    def pulse_bar(self, pbar, style_name=None, palette=None, interval_ms=180):
+        """Subtle color pulse for ttk.Progressbar while a task is active.
+
+        Does nothing on CTkProgressBar (fall back is harmless).
+        """
+        palette = palette or self.PULSE_GREENS
+        style_name = style_name or f"Liquid{id(pbar)}.Horizontal.TProgressbar"
+        key = ('pulse', id(pbar))
+        self._cancel(key)
+
+        try:
+            st = ttk.Style()
+            # Configure a dedicated style so we don't stomp on other bars
+            st.configure(style_name, thickness=18, troughcolor='#E8F5E9',
+                         background=palette[0], bordercolor=palette[0],
+                         lightcolor=palette[0], darkcolor=palette[0])
+            try:
+                pbar.configure(style=style_name)
+            except Exception:
+                return
+        except Exception:
+            return
+
+        state = {'running': True, 'i': 0, 'style': style_name,
+                 'palette': palette}
+        self._anim[key] = state
+
+        def tick():
+            if not state['running']:
+                return
+            try:
+                if not pbar.winfo_exists():
+                    state['running'] = False
+                    return
+                c = state['palette'][state['i'] % len(state['palette'])]
+                ttk.Style().configure(state['style'],
+                                      background=c, bordercolor=c,
+                                      lightcolor=c, darkcolor=c)
+                state['i'] += 1
+                self._schedule(key, state, tick, interval_ms)
+            except Exception:
+                state['running'] = False
+
+        tick()
+
+    def stop_pulse(self, pbar):
+        self._cancel(('pulse', id(pbar)))
+
+    # ---------- smooth progress-value interpolation ----------
+    def smooth_to(self, pbar, target, duration_ms=260, steps=14):
+        """Interpolate pbar['value'] from its current value to `target`.
+        Makes 10%→30% jumps feel liquid instead of snapping.
+        """
+        key = ('smooth', id(pbar))
+        self._cancel(key)
+        try:
+            current = float(pbar['value'])
+            maxv = float(pbar['maximum']) or 100.0
+        except Exception:
+            return
+        target = max(0.0, min(target, maxv))
+        delta = target - current
+        if abs(delta) < 0.3:
+            try:
+                pbar['value'] = target
+            except Exception:
+                pass
+            return
+
+        step_ms = max(15, duration_ms // steps)
+        inc = delta / steps
+        state = {'running': True, 'i': 0, 'cur': current}
+        self._anim[key] = state
+
+        def tick():
+            if not state['running']:
+                return
+            try:
+                if not pbar.winfo_exists():
+                    state['running'] = False
+                    return
+                state['i'] += 1
+                if state['i'] >= steps:
+                    pbar['value'] = target
+                    state['running'] = False
+                    return
+                state['cur'] += inc
+                pbar['value'] = state['cur']
+                self._schedule(key, state, tick, step_ms)
+            except Exception:
+                state['running'] = False
+
+        tick()
+
+    # ---------- soft color fade for status labels ----------
+    def flash(self, label, color, revert_to='#555', duration_ms=900):
+        """Briefly flash a label's foreground color (e.g. for success/error)."""
+        key = ('flash', id(label))
+        self._cancel(key)
+        try:
+            label.config(foreground=color)
+        except Exception:
+            return
+        state = {'running': True}
+        self._anim[key] = state
+
+        def revert():
+            if not state['running']:
+                return
+            try:
+                if label.winfo_exists():
+                    label.config(foreground=revert_to)
+            except Exception:
+                pass
+            state['running'] = False
+
+        try:
+            state['job'] = self.root.after(duration_ms, revert)
+        except Exception:
+            pass
+
+    # ---------- cleanup ----------
+    def stop(self, widget):
+        self._cancel(id(widget))
+        self._cancel(('pulse', id(widget)))
+        self._cancel(('smooth', id(widget)))
+        self._cancel(('flash', id(widget)))
+
+    def stop_all(self):
+        for key in list(self._anim.keys()):
+            self._cancel(key)
+
+
+class LabelEnrichmentWindow(tk.Toplevel):
+    """Fisher / hypergeometric enrichment of LLM-extracted labels.
+
+    Tests whether each categorical label value (e.g. tissue="liver", condition="control")
+    is over- or under-represented in a chosen *foreground* group compared to a
+    *background* universe. Produces:
+
+        * bar chart (top-N fold-change with significance stars)
+        * dot plot (fold-change × k, color = -log10(q))
+        * volcano (log2 FC vs -log10 q)
+        * enrichment table (CSV export)
+
+    Foreground selection strategies:
+        * Gene region: samples whose expression of gene G is in [lo, hi]
+        * Gene top-K percent: samples in the top K% of gene G's expression
+        * Platform comparison: use platform A as fg, platform B as bg
+        * Custom mask (via label value): e.g. "tissue == 'liver'"
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.app = parent  # main GUI reference
+        self.title("Label Enrichment — LLM Label × Expression / Platform")
+        self.transient(parent)
+        self.configure(bg=AERO["bg_top"])
+
+        # State ---------------------------------------------------------
+        self._current_enrichment = None  # last pd.DataFrame of results
+        self._figures = {}               # key → matplotlib Figure
+        self._canvases = {}              # key → FigureCanvasTkAgg
+
+        # Layout --------------------------------------------------------
+        self._build_ui()
+
+        # Populate pickers based on what the main app has loaded
+        self._populate_pickers()
+
+        try:
+            self.app._fit_window(self, fallback_w=1150, fallback_h=780)
+        except Exception:
+            self.geometry("1150x780")
+
+    # ─── UI ─────────────────────────────────────────────────────────
+    def _build_ui(self):
+        # Top: configuration panel
+        cfg = ttk.LabelFrame(self, text=" Enrichment configuration ", padding=10)
+        cfg.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        # Row 1 — platform + foreground strategy
+        r1 = ttk.Frame(cfg); r1.pack(fill=tk.X, pady=4)
+        ttk.Label(r1, text="Platform:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        self.plat_var = tk.StringVar()
+        self.plat_combo = ttk.Combobox(r1, textvariable=self.plat_var,
+                                        width=18, state="readonly")
+        self.plat_combo.pack(side=tk.LEFT, padx=(6, 16))
+        self.plat_combo.bind("<<ComboboxSelected>>", lambda e: self._on_platform_change())
+
+        ttk.Label(r1, text="Foreground:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        self.strategy_var = tk.StringVar(value="top_percent")
+        strategies = [
+            ("Gene — top %",       "top_percent"),
+            ("Gene — bottom %",    "bottom_percent"),
+            ("Gene — expression range", "range"),
+            ("Label value",        "label_value"),
+        ]
+        for text, val in strategies:
+            ttk.Radiobutton(r1, text=text, variable=self.strategy_var, value=val,
+                            command=self._on_strategy_change
+                            ).pack(side=tk.LEFT, padx=4)
+
+        # Row 2 — gene picker
+        r2 = ttk.Frame(cfg); r2.pack(fill=tk.X, pady=4)
+        ttk.Label(r2, text="Gene symbol:", font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self.gene_var = tk.StringVar()
+        self.gene_combo = ttk.Combobox(r2, textvariable=self.gene_var,
+                                        width=22)
+        self.gene_combo.pack(side=tk.LEFT, padx=(6, 16))
+
+        ttk.Label(r2, text="Threshold:", font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self.threshold_var = tk.StringVar(value="10")
+        ttk.Entry(r2, textvariable=self.threshold_var, width=8).pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Label(r2, text="(percent for top/bottom %)",
+                  font=("Segoe UI", 8, "italic"),
+                  foreground=AERO["muted"]).pack(side=tk.LEFT, padx=(2, 16))
+
+        ttk.Label(r2, text="Range:", font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        self.range_lo_var = tk.StringVar()
+        self.range_hi_var = tk.StringVar()
+        ttk.Entry(r2, textvariable=self.range_lo_var, width=8).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Label(r2, text="…").pack(side=tk.LEFT)
+        ttk.Entry(r2, textvariable=self.range_hi_var, width=8).pack(side=tk.LEFT, padx=(2, 4))
+
+        # Row 3 — label columns + min count
+        r3 = ttk.Frame(cfg); r3.pack(fill=tk.X, pady=4)
+        ttk.Label(r3, text="Label columns to test:",
+                  font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        self.label_cols_frame = ttk.Frame(r3)
+        self.label_cols_frame.pack(side=tk.LEFT, padx=(8, 16))
+        self.label_col_vars = {}  # col name → BooleanVar
+
+        ttk.Label(r3, text="Min count:").pack(side=tk.LEFT)
+        self.min_count_var = tk.StringVar(value="3")
+        ttk.Entry(r3, textvariable=self.min_count_var, width=4).pack(side=tk.LEFT, padx=4)
+        ttk.Label(r3, text="α:").pack(side=tk.LEFT, padx=(12, 0))
+        self.alpha_var = tk.StringVar(value="0.05")
+        ttk.Entry(r3, textvariable=self.alpha_var, width=5).pack(side=tk.LEFT, padx=4)
+
+        # Row 4 — run / export
+        r4 = ttk.Frame(cfg); r4.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(r4, text="Run Enrichment",
+                   command=self._run_enrichment,
+                   style="Primary.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(r4, text="Export Table (CSV)",
+                   command=self._export_csv,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(r4, text="Export All Plots",
+                   command=self._export_all_plots,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=4)
+        self.status_var = tk.StringVar(value="Ready.")
+        ttk.Label(r4, textvariable=self.status_var,
+                  foreground=AERO["muted"],
+                  font=("Segoe UI", 9, "italic")).pack(side=tk.LEFT, padx=16)
+
+        # Bottom: notebook with plots + table ---------------------------
+        self.nb = ttk.Notebook(self)
+        self.nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
+
+        self.tab_bar = ttk.Frame(self.nb); self.nb.add(self.tab_bar, text="Bar chart")
+        self.tab_dot = ttk.Frame(self.nb); self.nb.add(self.tab_dot, text="Dot plot")
+        self.tab_volc = ttk.Frame(self.nb); self.nb.add(self.tab_volc, text="Volcano")
+        self.tab_tbl = ttk.Frame(self.nb); self.nb.add(self.tab_tbl, text="Table")
+
+        # Table widget
+        cols = ("term", "k", "K", "n", "N", "fold_change",
+                "odds_ratio", "p_value", "q_value")
+        self.table = ttk.Treeview(self.tab_tbl, columns=cols, show="headings", height=18)
+        for c in cols:
+            self.table.heading(c, text=c, command=lambda cc=c: self._sort_table(cc))
+            self.table.column(c, width=100 if c == "term" else 80, anchor="center")
+        self.table.column("term", width=260, anchor="w")
+        self.table.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        sb = ttk.Scrollbar(self.tab_tbl, command=self.table.yview)
+        self.table.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    # ─── Data discovery ────────────────────────────────────────────
+    def _populate_pickers(self):
+        plats = sorted(self.app.gpl_datasets.keys()) if hasattr(self.app, "gpl_datasets") else []
+        self.plat_combo["values"] = plats
+        if plats:
+            self.plat_var.set(plats[0])
+            self._on_platform_change()
+
+    def _on_platform_change(self):
+        plat = self.plat_var.get()
+        if not plat or plat not in self.app.gpl_datasets:
+            return
+        df = self.app.gpl_datasets[plat]
+        # Gene columns (heuristic: strings ALL-UPPER or containing a letter and a digit,
+        # excluded from LABEL_COLS; fall back to any numeric column)
+        label_cols = [c for c in df.columns
+                      if c in globals().get("LABEL_COLS", [])
+                      or c.startswith("Classified_")
+                      or c.lower() in ("tissue", "condition", "treatment",
+                                        "cell_type", "disease", "age")]
+        # Gene symbols = numeric columns that are not label columns
+        gene_cols = [c for c in df.columns
+                     if c not in label_cols
+                     and pd.api.types.is_numeric_dtype(df[c])]
+        self.gene_combo["values"] = gene_cols[:5000]
+        if gene_cols:
+            self.gene_var.set(gene_cols[0])
+
+        # Rebuild label column checkboxes
+        for child in self.label_cols_frame.winfo_children():
+            child.destroy()
+        self.label_col_vars = {}
+        if not label_cols:
+            ttk.Label(self.label_cols_frame,
+                      text="(no label columns detected)",
+                      foreground=AERO["muted"],
+                      font=("Segoe UI", 9, "italic")).pack(side=tk.LEFT)
+        for col in label_cols[:10]:
+            v = tk.BooleanVar(value=True)
+            self.label_col_vars[col] = v
+            ttk.Checkbutton(self.label_cols_frame, text=col,
+                            variable=v).pack(side=tk.LEFT, padx=3)
+
+    def _on_strategy_change(self):
+        # Just used for visual cues — heavy work happens in _run_enrichment
+        s = self.strategy_var.get()
+        if s == "range":
+            self.status_var.set("Range mode: enter low and high expression values.")
+        elif s == "label_value":
+            self.status_var.set(
+                "Label-value mode: enter <column>=<value> in the gene box "
+                "(e.g. 'Classified_Tissue=liver').")
+        elif s == "top_percent":
+            self.status_var.set(
+                "Top-% mode: threshold = percentile (e.g. 10 = top 10%).")
+        else:
+            self.status_var.set(
+                "Bottom-% mode: threshold = percentile (e.g. 10 = bottom 10%).")
+
+    # ─── Run analysis ──────────────────────────────────────────────
+    def _run_enrichment(self):
+        try:
+            from genevariate.utils.plot_types import (
+                label_enrichment, multi_group_enrichment,
+                plot_enrichment_bar, plot_enrichment_dot,
+                plot_enrichment_volcano,
+            )
+        except Exception as exc:
+            messagebox.showerror("Import error",
+                                 f"Could not import enrichment helpers:\n{exc}",
+                                 parent=self)
+            return
+
+        plat = self.plat_var.get()
+        if not plat or plat not in self.app.gpl_datasets:
+            messagebox.showwarning("No platform",
+                                    "Pick a loaded platform first.",
+                                    parent=self)
+            return
+        df = self.app.gpl_datasets[plat]
+
+        # Build foreground mask
+        try:
+            fg_mask = self._build_fg_mask(df)
+        except Exception as exc:
+            messagebox.showerror("Foreground error", str(exc), parent=self)
+            return
+        if fg_mask.sum() == 0:
+            messagebox.showwarning("Empty foreground",
+                                    "No samples matched the foreground criteria.",
+                                    parent=self)
+            return
+
+        # Build label column list
+        label_cols = [c for c, v in self.label_col_vars.items() if v.get()]
+        if not label_cols:
+            messagebox.showwarning("No label columns",
+                                    "Tick at least one label column to test.",
+                                    parent=self)
+            return
+
+        try:
+            min_count = max(1, int(self.min_count_var.get()))
+            alpha = float(self.alpha_var.get())
+        except Exception:
+            min_count, alpha = 3, 0.05
+
+        # Run one enrichment per column, concatenate
+        frames = []
+        for col in label_cols:
+            labels_s = df[col].astype(object)
+            sub = label_enrichment(labels_s, fg_mask,
+                                    min_count=min_count, alpha=alpha)
+            if not sub.empty:
+                sub.insert(0, "column", col)
+                frames.append(sub)
+        if not frames:
+            messagebox.showwarning("No enrichments",
+                                    "No label values met the min-count threshold.",
+                                    parent=self)
+            return
+        result = pd.concat(frames, ignore_index=True).sort_values("p_value")
+        # Disambiguate same-valued terms across columns
+        result["term"] = result["column"] + ": " + result["term"].astype(str)
+        self._current_enrichment = result
+
+        # Render
+        self._render_bar(result)
+        self._render_dot(result)
+        self._render_volcano(result)
+        self._populate_table(result)
+        n_sig = int((result["q_value"] < alpha).sum())
+        self.status_var.set(
+            f"Tested {len(result)} label values across {len(label_cols)} "
+            f"column(s) | fg n={int(fg_mask.sum())} | {n_sig} significant (q<{alpha:g}).")
+
+    # ─── Foreground construction ───────────────────────────────────
+    def _build_fg_mask(self, df):
+        strat = self.strategy_var.get()
+        if strat == "label_value":
+            raw = str(self.gene_var.get()).strip()
+            if "=" not in raw:
+                raise ValueError(
+                    "Label-value mode needs 'column=value' (e.g. Classified_Tissue=liver).")
+            col, val = [s.strip() for s in raw.split("=", 1)]
+            if col not in df.columns:
+                raise ValueError(f"Column '{col}' not found in platform.")
+            return df[col].astype(str) == val
+
+        gene = self.gene_var.get().strip()
+        if not gene or gene not in df.columns:
+            raise ValueError(f"Gene '{gene}' not found in platform.")
+        col = df[gene]
+        if not pd.api.types.is_numeric_dtype(col):
+            raise ValueError(f"Gene '{gene}' is not numeric.")
+        values = col.astype(float)
+
+        if strat in ("top_percent", "bottom_percent"):
+            try:
+                pct = float(self.threshold_var.get())
+            except Exception:
+                pct = 10.0
+            pct = float(np.clip(pct, 0.1, 99.9))
+            q = pct / 100.0
+            if strat == "top_percent":
+                cut = values.quantile(1 - q)
+                return values >= cut
+            else:
+                cut = values.quantile(q)
+                return values <= cut
+
+        # range
+        try:
+            lo = float(self.range_lo_var.get())
+            hi = float(self.range_hi_var.get())
+        except Exception:
+            raise ValueError("Range mode needs numeric low and high values.")
+        if hi < lo:
+            lo, hi = hi, lo
+        return (values >= lo) & (values <= hi)
+
+    # ─── Plot rendering ────────────────────────────────────────────
+    def _embed_figure(self, tab, fig, key):
+        # Tear down any previous canvas in this tab
+        for child in tab.winfo_children():
+            child.destroy()
+        old = self._figures.pop(key, None)
+        if old is not None:
+            try:
+                plt.close(old)
+            except Exception:
+                pass
+        canvas = FigureCanvasTkAgg(fig, master=tab)
+        canvas.draw()
+        toolbar = NavigationToolbar2Tk(canvas, tab)
+        toolbar.update()
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self._figures[key] = fig
+        self._canvases[key] = canvas
+
+    def _render_bar(self, result):
+        from genevariate.utils.plot_types import plot_enrichment_bar
+        fig, ax = plt.subplots(figsize=viz_smart_figsize("default"))
+        plot_enrichment_bar(ax, result, top_n=20)
+        fig.tight_layout()
+        self._embed_figure(self.tab_bar, fig, "bar")
+
+    def _render_dot(self, result):
+        from genevariate.utils.plot_types import plot_enrichment_dot
+        fig, ax = plt.subplots(figsize=viz_smart_figsize("default"))
+        plot_enrichment_dot(ax, result, top_n=25)
+        fig.tight_layout()
+        self._embed_figure(self.tab_dot, fig, "dot")
+
+    def _render_volcano(self, result):
+        from genevariate.utils.plot_types import plot_enrichment_volcano
+        fig, ax = plt.subplots(figsize=viz_smart_figsize("default"))
+        plot_enrichment_volcano(ax, result)
+        try:
+            viz_enable_hover(fig=fig,
+                             formatter=lambda sel: result.iloc[int(sel.index)]["term"]
+                             if sel.index is not None and sel.index < len(result) else "")
+        except Exception:
+            pass
+        fig.tight_layout()
+        self._embed_figure(self.tab_volc, fig, "volcano")
+
+    def _populate_table(self, result):
+        for iid in self.table.get_children():
+            self.table.delete(iid)
+        for _, row in result.iterrows():
+            fc = row["fold_change"]
+            fc_str = f"{fc:.2f}" if np.isfinite(fc) else "inf"
+            self.table.insert("", "end", values=(
+                row["term"], row["k"], row["K"], row["n"], row["N"],
+                fc_str,
+                f"{row['odds_ratio']:.2f}" if np.isfinite(row["odds_ratio"]) else "inf",
+                f"{row['p_value']:.2e}",
+                f"{row['q_value']:.2e}",
+            ))
+
+    def _sort_table(self, col):
+        items = [(self.table.set(k, col), k) for k in self.table.get_children("")]
+        try:
+            items.sort(key=lambda t: float(t[0]))
+        except ValueError:
+            items.sort(key=lambda t: t[0])
+        for i, (_, k) in enumerate(items):
+            self.table.move(k, "", i)
+
+    # ─── Export ────────────────────────────────────────────────────
+    def _export_csv(self):
+        if self._current_enrichment is None or self._current_enrichment.empty:
+            messagebox.showinfo("Nothing to export",
+                                 "Run an enrichment first.", parent=self)
+            return
+        p = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            initialfile=f"label_enrichment_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            parent=self)
+        if not p:
+            return
+        try:
+            self._current_enrichment.to_csv(p, index=False)
+            messagebox.showinfo("Exported", f"Saved to:\n{p}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc), parent=self)
+
+    def _export_all_plots(self):
+        if not self._figures:
+            messagebox.showinfo("Nothing to export",
+                                 "Run an enrichment first.", parent=self)
+            return
+        d = filedialog.askdirectory(title="Export folder", parent=self)
+        if not d:
+            return
+        try:
+            from genevariate.utils.export_manager import PlotExportManager
+            mgr = PlotExportManager(base_dir=d)
+            plat = self.plat_var.get() or "enrichment"
+            paths = mgr.export_batch(self._figures, analysis_id=f"enrichment_{plat}")
+            mgr.write_html_index(paths, title=f"Enrichment — {plat}",
+                                  subdir=list(paths.values())[0].parent.name
+                                  if paths else None)
+            messagebox.showinfo("Exported",
+                                 f"Saved {len(paths)} figure(s) to:\n{d}",
+                                 parent=self)
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc), parent=self)
+
+    def destroy(self):
+        for fig in list(self._figures.values()):
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
+        self._figures.clear()
+        self._canvases.clear()
+        super().destroy()
+
+
 class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
     """Complete GeneVariate main application window - Modern dark UI."""
 
@@ -8723,6 +9905,9 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
             self.minsize(600, 500)
         except Exception: pass
         self.after_id = None
+
+        # UI animation helper (liquid spinners, smooth progress, pulse)
+        self._animator = _UIAnimator(self)
 
         try:
             icon_path = Path(__file__).parent.parent / "assets" / "icon.png"
@@ -8832,7 +10017,7 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                         foreground=AERO["text"],
                         font=('Segoe UI', 10))
         style.configure("TLabelframe",
-                        background=AERO["panel"],
+                        background=AERO["bg_top"],
                         foreground=AERO["accent_dark"],
                         bordercolor=AERO["border"],
                         lightcolor=AERO["border_soft"],
@@ -8889,6 +10074,134 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                   foreground=[('active', AERO["accent_dark"]),
                               ('pressed', "#FFFFFF")],
                   bordercolor=[('active', AERO["accent_dark"])])
+
+        # ── Unified named button styles (Phase 1 redesign) ──────────
+        # Primary: the main call-to-action of a panel (sky)
+        style.configure("Primary.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background=AERO["accent"],
+                        foreground="#FFFFFF",
+                        bordercolor=AERO["accent_dark"],
+                        padding=(14, 8),
+                        relief="flat")
+        style.map("Primary.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', AERO["accent_dark"]),
+                              ('active', AERO["sky_top"])],
+                  foreground=[('disabled', AERO["muted"])],
+                  bordercolor=[('active', AERO["accent_dark"])])
+
+        # Secondary: supporting actions (neutral sky)
+        style.configure("Secondary.TButton",
+                        font=('Segoe UI', 10),
+                        background=AERO["panel_bot"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["border"],
+                        padding=(12, 6),
+                        relief="flat")
+        style.map("Secondary.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', AERO["pressed_sky"]),
+                              ('active', AERO["hover_sky"])],
+                  foreground=[('disabled', AERO["muted"])])
+
+        # Destructive: clear / delete / deselect (danger)
+        style.configure("Destructive.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background="#F7DCDA",
+                        foreground=AERO["danger"],
+                        bordercolor=AERO["danger"],
+                        padding=(12, 6),
+                        relief="flat")
+        style.map("Destructive.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', AERO["danger_hover"]),
+                              ('active', "#F1B5AF")],
+                  foreground=[('disabled', AERO["muted"]),
+                              ('pressed', "#FFFFFF")])
+
+        # Warn / Download: orange emphasis
+        style.configure("Warn.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background="#FFE7D1",
+                        foreground="#9A4A06",
+                        bordercolor=AERO["warn"],
+                        padding=(12, 6),
+                        relief="flat")
+        style.map("Warn.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', "#D35400"),
+                              ('active', "#F7C08A")],
+                  foreground=[('disabled', AERO["muted"]),
+                              ('pressed', "#FFFFFF")])
+
+        # Tool: large flagship buttons in the Analysis Tools panel
+        style.configure("Tool.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background=AERO["accent_light"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["accent"],
+                        padding=(18, 14),
+                        relief="flat")
+        style.map("Tool.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', AERO["accent"]),
+                              ('active', AERO["sky_top"])],
+                  foreground=[('disabled', AERO["muted"]),
+                              ('pressed', "#FFFFFF")])
+
+        # ToolGreen / ToolWarn: matching flavors for the tool row
+        style.configure("ToolGreen.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background=AERO["green_light"],
+                        foreground=AERO["green_dark"],
+                        bordercolor=AERO["green"],
+                        padding=(18, 14),
+                        relief="flat")
+        style.map("ToolGreen.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', AERO["green_dark"]),
+                              ('active', "#A5D6A7")],
+                  foreground=[('disabled', AERO["muted"]),
+                              ('pressed', "#FFFFFF")])
+
+        style.configure("ToolWarn.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        background="#FFE7D1",
+                        foreground="#9A4A06",
+                        bordercolor=AERO["warn"],
+                        padding=(18, 14),
+                        relief="flat")
+        style.map("ToolWarn.TButton",
+                  background=[('disabled', AERO["border_soft"]),
+                              ('pressed', "#D35400"),
+                              ('active', "#F7C08A")],
+                  foreground=[('disabled', AERO["muted"]),
+                              ('pressed', "#FFFFFF")])
+
+        # Toggle (chevron): compact flat pill used by Step 1 collapse
+        style.configure("Toggle.TButton",
+                        font=('Segoe UI', 9, 'bold'),
+                        background=AERO["panel_bot"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["border"],
+                        padding=(10, 3),
+                        relief="flat")
+        style.map("Toggle.TButton",
+                  background=[('active', AERO["hover_sky"]),
+                              ('pressed', AERO["pressed_sky"])])
+
+        # Ghost: minimal, for inline refresh-style actions
+        style.configure("Ghost.TButton",
+                        font=('Segoe UI', 9),
+                        background=AERO["bg_top"],
+                        foreground=AERO["accent_dark"],
+                        bordercolor=AERO["border_soft"],
+                        padding=(8, 3),
+                        relief="flat")
+        style.map("Ghost.TButton",
+                  background=[('active', AERO["hover_sky"]),
+                              ('pressed', AERO["pressed_sky"])])
 
         # ── Entries / comboboxes ─────────────────────────────────
         style.configure("TEntry",
@@ -9169,7 +10482,7 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         tools_menu.add_command(label="Curate Labels (LLM)",
                               command=self._open_llm_curator)
         tools_menu.add_separator()
-        tools_menu.add_command(label="Download GPL Platform...",
+        tools_menu.add_command(label="Download Platform...",
                               command=self._open_gpl_downloader_window)
         tools_menu.add_command(label="Add Custom Platform...",
                               command=self._load_custom_gpl_data)
@@ -9403,7 +10716,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 if msg.startswith("PROGRESS:"):
                     try:
                         progress_val = float(msg.split(":", 1)[1])
-                        self.progressbar["value"] = progress_val
+                        # Route through update_progress so the shimmer animation
+                        # is triggered for every process, not just downloads.
+                        self.update_progress(value=progress_val)
                         
                         if hasattr(self, 'status_label'):
                             if progress_val >= 100:
@@ -9416,31 +10731,84 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     except (ValueError, IndexError):
                         pass
                 else:
-                    self.log_text.insert(tk.END, msg + chr(10))
-                    
-                    if "[ERROR]" in msg or "ERROR" in msg:
-                        start_idx = self.log_text.search("[ERROR]", "end-2l", "end")
-                        if start_idx:
-                            self.log_text.tag_add("error", start_idx, "end-1c")
-                    elif "[WARNING]" in msg or "WARNING" in msg:
-                        start_idx = self.log_text.search("[WARNING]", "end-2l", "end")
-                        if start_idx:
-                            self.log_text.tag_add("warning", start_idx, "end-1c")
-                    elif "[INFO]" in msg or "OK" in msg:
-                        start_idx = self.log_text.index("end-2l")
-                        self.log_text.tag_add("info", start_idx, "end-1c")
-                    
-                    self.log_text.see(tk.END)
+                    self._render_log_line(msg)
                     self._log_msg_count += 1
                     if hasattr(self, 'log_status_label'):
-                        self.log_status_label.config(text=f"Log: {self._log_msg_count} messages", foreground="blue")
+                        self.log_status_label.config(
+                            text=f"Log: {self._log_msg_count} messages",
+                            foreground="blue")
                     
         except q.Empty:
             pass
-        
+
         if self.winfo_exists():
             self.after_id = self.after(100, self.process_log_queue)
-    
+
+    # ------------------------------------------------------------------
+    # Log formatting — renders one message as timestamp + category chip
+    # + level badge + body, with zebra-striped row backgrounds so the
+    # activity log looks like a proper product console, not a .txt dump.
+    # ------------------------------------------------------------------
+    _LOG_CAT_RE = None  # compiled lazily
+
+    def _render_log_line(self, msg):
+        import re
+        from datetime import datetime
+
+        if self._LOG_CAT_RE is None:
+            # Capture a leading [CATEGORY] tag if present. Category allows
+            # letters, spaces, digits, arrows and a few punctuation chars.
+            type(self)._LOG_CAT_RE = re.compile(r'^\s*\[([^\]]{1,24})\]\s?(.*)$',
+                                                 re.DOTALL)
+
+        line_idx = self._log_line_idx
+        self._log_line_idx += 1
+        zebra = "zebra_odd" if line_idx % 2 else "zebra_even"
+
+        # Level detection (affects level badge + body color)
+        msg_u = msg.upper()
+        if "[ERROR]" in msg_u or "ERROR:" in msg_u or "FAIL" in msg_u:
+            badge, badge_tag, body_tag = " ERROR ", "level_err",  "body_err"
+        elif "[WARNING]" in msg_u or "WARN" in msg_u:
+            badge, badge_tag, body_tag = " WARN  ", "level_warn", "body_warn"
+        elif "[INFO]" in msg_u or " OK" in msg_u or "✓" in msg:
+            badge, badge_tag, body_tag = " INFO  ", "level_info", "body"
+        else:
+            badge, badge_tag, body_tag = "  •    ", "level_info", "body"
+
+        # Category extraction: "[Foo] rest" -> cat="Foo", rest="rest"
+        cat, rest = None, msg
+        m = self._LOG_CAT_RE.match(msg)
+        if m:
+            cat = m.group(1).strip()
+            rest = m.group(2)
+
+        # Record the starting position, then append the formatted line
+        start = self.log_text.index("end-1c")
+
+        # Timestamp
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.log_text.insert(tk.END, f"{ts}  ", ("ts", zebra))
+
+        # Level badge
+        self.log_text.insert(tk.END, f"{badge} ", (badge_tag, zebra))
+
+        # Category chip (bold, colored per-category)
+        if cat is not None:
+            cat_tag = f"cat_{cat}" if cat in self._log_cat_colors else "cat_default"
+            self.log_text.insert(tk.END, f"[{cat}] ", (cat_tag, zebra))
+
+        # Body text
+        self.log_text.insert(tk.END, rest.rstrip() + "\n", (body_tag, zebra))
+
+        # Make sure the zebra tag covers the entire line (Text widget treats
+        # newline-delimited rows as separate display lines — this keeps the
+        # stripe contiguous across the row).
+        end = self.log_text.index("end-1c")
+        self.log_text.tag_add(zebra, start, end)
+
+        self.log_text.see(tk.END)
+
     def _load_geometadb_connection(self):
         """Loads GEOmetadb into memory with progress indication."""
         gz_path = CONFIG['paths']['geo_db']
@@ -9804,7 +11172,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         plat_frame = ttk.LabelFrame(self._main_sf, text=" Load Gene Expression Platforms", padding=10)
         plat_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        info_label = ttk.Label(plat_frame, text="Load GPL platforms to analyze gene distributions. Use 'Download GPL' to fetch any platform from NCBI GEO, or 'Add Custom Platform' to load your own data files.", foreground="gray", font=('Segoe UI', 9, 'italic'), wraplength=1100)
+        info_label = ttk.Label(plat_frame, text="Load platforms to analyze gene distributions. Use 'Download Platform' to fetch any microarray, bulk RNA-seq, single-cell, or methylation platform from NCBI GEO, or 'Add Custom Platform' to load your own data files.", foreground="gray", font=('Segoe UI', 9, 'italic'), wraplength=1100)
         info_label.pack(fill=tk.X, pady=(0, 10))
         
         # Dynamic platform buttons — discovered from data directory
@@ -9817,43 +11185,71 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         ttk.Button(custom_frame, text="+ Add Custom Platform", command=self._load_custom_gpl_data, style="Add.TButton").pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(custom_frame, text="Download GPL", command=self._open_gpl_downloader_window, style="Action.TButton").pack(side=tk.LEFT, padx=8)
+        ttk.Button(custom_frame, text="Download Platform", command=self._open_gpl_downloader_window, style="Action.TButton").pack(side=tk.LEFT, padx=8)
 
-        tk.Button(custom_frame, text="Refresh", command=self._refresh_platform_buttons,
-                  font=('Segoe UI', 9), padx=8, cursor="hand2").pack(side=tk.LEFT, padx=5)
+        ttk.Button(custom_frame, text="Refresh", command=self._refresh_platform_buttons,
+                   style="Ghost.TButton").pack(side=tk.LEFT, padx=5)
 
-        
         self.loaded_plat_frame = ttk.Frame(plat_frame)
         self.loaded_plat_frame.pack(fill=tk.X, padx=5, pady=5)
-        self.loaded_plat_label = ttk.Label(self.loaded_plat_frame, text="No platforms loaded yet", foreground="orange", font=('Segoe UI', 9, 'bold'))
+        self.loaded_plat_label = ttk.Label(
+            self.loaded_plat_frame, text="No platforms loaded yet",
+            foreground=AERO["warn"], font=('Segoe UI', 9, 'bold'))
         self.loaded_plat_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Button(self.loaded_plat_frame, text="+ Add Data Directory...",
-                  command=self._add_data_directory,
-                  bg="#1976D2", fg="white", font=('Segoe UI', 9, 'bold'),
-                  padx=10, cursor="hand2").pack(side=tk.RIGHT, padx=5)
+        ttk.Button(self.loaded_plat_frame, text="+ Add Data Directory…",
+                   command=self._add_data_directory,
+                   style="Secondary.TButton").pack(side=tk.RIGHT, padx=5)
 
         tools_frame = ttk.LabelFrame(self._main_sf, text=" Analysis Tools", padding=10)
         tools_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(tools_frame, text="Use these tools after loading platforms:", font=('Segoe UI', 9, 'italic'), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(tools_frame, text="Always available — each tool can quick-load data on demand:", font=('Segoe UI', 9, 'italic'), foreground='gray').pack(anchor=tk.W, pady=(0, 5))
         
         tools_btn_frame = ttk.Frame(tools_frame)
         tools_btn_frame.pack(fill=tk.X, pady=4)
-        tools_btn_frame.columnconfigure((0, 1, 2), weight=1, uniform="toolbtn")
-        
-        _tool_font = ('Segoe UI', 10, 'bold')
-        
-        self.gene_explorer_btn = tk.Button(tools_btn_frame, text="Gene Distribution Explorer", command=self.show_gene_distribution_popup, bg="#9C27B0", fg="white", font=_tool_font, relief=tk.RAISED, bd=2, height=2, cursor="hand2", state=tk.DISABLED)
-        self.gene_explorer_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        self._add_button_hover(self.gene_explorer_btn, "#7B1FA2", "#9C27B0")
-        
-        self.compare_btn = tk.Button(tools_btn_frame, text="Compare Distributions", command=self.open_compare_window, bg="#FF9800", fg="white", font=_tool_font, relief=tk.RAISED, bd=2, height=2, cursor="hand2", state=tk.DISABLED)
-        self.compare_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self._add_button_hover(self.compare_btn, "#F57C00", "#FF9800")
+        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="toolbtn")
 
-        self.dist_class_btn = tk.Button(tools_btn_frame, text="Distribution Classification", command=self._open_dist_classification, bg="#00897B", fg="white", font=_tool_font, relief=tk.RAISED, bd=2, height=2, cursor="hand2", state=tk.DISABLED)
-        self.dist_class_btn.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
-        self._add_button_hover(self.dist_class_btn, "#00695C", "#00897B")
+        self.gene_explorer_btn = ttk.Button(
+            tools_btn_frame, text="Gene Distribution Explorer",
+            command=self.show_gene_distribution_popup,
+            style="Tool.TButton")
+        self.gene_explorer_btn.grid(row=0, column=0, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.gene_explorer_btn,
+                          "Interactive histograms & KDEs of gene expression across loaded platforms.")
+
+        self.compare_btn = ttk.Button(
+            tools_btn_frame, text="Compare Distributions",
+            command=self.open_compare_window,
+            style="ToolWarn.TButton")
+        self.compare_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.compare_btn,
+                          "Compare two or more gene / sample distributions with KDE, PCA/UMAP and clustering.")
+
+        self.dist_class_btn = ttk.Button(
+            tools_btn_frame, text="Distribution Classification",
+            command=self._open_dist_classification,
+            style="ToolGreen.TButton")
+        self.dist_class_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.dist_class_btn,
+                          "Classify distributions (unimodal / bimodal / skew) and compute variability metrics.")
+
+        self.label_enrich_btn = ttk.Button(
+            tools_btn_frame, text="Label Enrichment",
+            command=self._open_label_enrichment,
+            style="Tool.TButton")
+        self.label_enrich_btn.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.label_enrich_btn,
+                          "Fisher / hypergeometric enrichment of LLM-extracted labels across genes / distributions / platforms.")
+
+        self.cellxgene_btn = ttk.Button(
+            tools_btn_frame, text="Single-cell (CELLxGENE)",
+            command=self._open_cellxgene_browser,
+            style="Tool.TButton")
+        self.cellxgene_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.cellxgene_btn,
+                          "Browse and fetch single-cell RNA-seq data from the CELLxGENE Discover Census "
+                          "(real public scRNA-seq submissions). Pseudo-bulk the result to use it in every other window, "
+                          "or open cell-level plots (composition / UMAP / dot plot / QC).")
         
         # ── Label Source (inside tools_frame - always visible) ──────
         ttk.Separator(tools_frame, orient='horizontal').pack(fill=tk.X, pady=(8, 4))
@@ -9873,26 +11269,21 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
         # File controls row (hidden until "file" selected)
         self.labels_file_row = ttk.Frame(tools_frame)
-        tk.Button(self.labels_file_row, text="+ Add Label File...",
-                  command=self._add_label_file,
-                  bg="#1976D2", fg="white", font=("Segoe UI", 9, "bold"),
-                  padx=10, cursor="hand2").pack(side=tk.LEFT, padx=2)
-        tk.Button(self.labels_file_row, text="+ Add Folder...",
-                  command=self._browse_labels_folder,
-                  bg="#0D47A1", fg="white", font=("Segoe UI", 9),
-                  padx=8, cursor="hand2").pack(side=tk.LEFT, padx=2)
-        tk.Button(self.labels_file_row, text="Set Labels Directory",
-                  command=self._set_labels_directory,
-                  bg="#388E3C", fg="white", font=("Segoe UI", 9),
-                  padx=8, cursor="hand2").pack(side=tk.LEFT, padx=2)
-        tk.Button(self.labels_file_row, text="Clear All",
-                  command=self._clear_all_labels,
-                  bg="#757575", fg="white", font=("Segoe UI", 9),
-                  padx=8, cursor="hand2").pack(side=tk.LEFT, padx=2)
-        tk.Button(self.labels_file_row, text="Curate Labels (LLM)",
-                  command=self._open_llm_curator,
-                  bg="#E65100", fg="white", font=("Segoe UI", 9, "bold"),
-                  padx=8, cursor="hand2").pack(side=tk.LEFT, padx=2)
+        ttk.Button(self.labels_file_row, text="+ Add Label File…",
+                   command=self._add_label_file,
+                   style="Primary.TButton").pack(side=tk.LEFT, padx=3)
+        ttk.Button(self.labels_file_row, text="+ Add Folder…",
+                   command=self._browse_labels_folder,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=3)
+        ttk.Button(self.labels_file_row, text="Set Labels Directory",
+                   command=self._set_labels_directory,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=3)
+        ttk.Button(self.labels_file_row, text="Clear All",
+                   command=self._clear_all_labels,
+                   style="Destructive.TButton").pack(side=tk.LEFT, padx=3)
+        ttk.Button(self.labels_file_row, text="Curate Labels (LLM)",
+                   command=self._open_llm_curator,
+                   style="Warn.TButton").pack(side=tk.LEFT, padx=3)
         ttk.Label(self.labels_file_row,
                   text="  (GPL ID auto-detected from filename)",
                   font=("Segoe UI", 8, "italic"), foreground="gray").pack(side=tk.LEFT, padx=4)
@@ -9909,36 +11300,232 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                             text="LLM mode: samples labeled by Ollama during analysis.",
                                             font=("Segoe UI", 8, "italic"), foreground="gray")
         self.labels_status_lbl.pack(fill=tk.X, padx=4, pady=(2, 0))
-        self.step1_frame = ttk.LabelFrame(self._main_sf, text=" Step 1: Discover Experiments (Optional)", padding=10)
+        # Lightly-padded labelframe so the collapsed state doesn't leave
+        # an ugly blank white rectangle — padding grows only when expanded.
+        self.step1_frame = ttk.LabelFrame(
+            self._main_sf,
+            text=" Step 1: Discover Experiments (Optional)",
+            padding=(8, 2, 8, 2),
+        )
         self.step1_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+        self._step1_title = "Step 1: Discover Experiments (Optional)"
+        self._set_step_status(self.step1_frame, self._step1_title, "pending")
+
         collapse_frame = ttk.Frame(self.step1_frame)
-        collapse_frame.pack(fill=tk.X)
-        
+        collapse_frame.pack(fill=tk.X, pady=0)
+
         self.step1_collapsed = tk.BooleanVar(value=True)
-        self.step1_toggle_btn = ttk.Button(collapse_frame, text=" Show", command=self._toggle_step1)
+        # Compact chevron-style toggle button (ttk — consistent with app theme)
+        self.step1_toggle_btn = ttk.Button(
+            collapse_frame, text="▸  Show",
+            command=self._toggle_step1,
+            style="Toggle.TButton",
+        )
         self.step1_toggle_btn.pack(side=tk.LEFT)
-        
-        ttk.Label(collapse_frame, text="Search GEO database for experiments by keywords", font=('Segoe UI', 9, 'italic'), foreground='gray').pack(side=tk.LEFT, padx=10)
-        
+
+        ttk.Label(collapse_frame,
+                  text="Search GEOmetadb (+ optional ARCHS4 / CELLxGENE / Expression Atlas) by keywords",
+                  font=('Segoe UI', 9, 'italic'),
+                  foreground=AERO["muted"]
+                  ).pack(side=tk.LEFT, padx=10)
+
         self.step1_content = ttk.Frame(self.step1_frame)
-        
-        ttk.Label(self.step1_content, text="Platform Filter (e.g., GPL570,GPL96):").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.platform_entry = ttk.Entry(self.step1_content, width=60)
-        self.platform_entry.grid(row=0, column=1, padx=5, pady=2, sticky=tk.EW)
-        
-        ttk.Label(self.step1_content, text="Keywords (comma-separated):").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.filter_entry = ttk.Entry(self.step1_content, width=60)
-        self.filter_entry.grid(row=1, column=1, padx=5, pady=2, sticky=tk.EW)
-        self.step1_content.grid_columnconfigure(1, weight=1)
-        
+
+        # Load each source's official logo from assets/icons/ (shipped with
+        # the app). Fall back to a coded badge if PIL fails to decode one.
+        # Logos remain property of their respective organisations (NCBI,
+        # Ma'ayan Lab, CZI, EMBL-EBI) — used for source attribution only.
+        _icons_dir = Path(__file__).parent.parent / "assets" / "icons"
+        _fallback = {
+            "geo":        ("#2E5E9F", "GEO"),
+            "archs4":     ("#E87722", "A4"),
+            "cellxgene":  ("#7A4FBF", "Cx"),
+            "atlas":      ("#008080", "EA"),
+        }
+        self._source_icons = {}
+        TARGET_H = 22
+        MAX_W = 80
+        for key, (color, initials) in _fallback.items():
+            icon = None
+            try:
+                from PIL import Image, ImageTk
+                candidates = list(_icons_dir.glob(f"{key}.*"))
+                if candidates:
+                    img = Image.open(str(candidates[0])).convert("RGBA")
+                    w, h = img.size
+                    new_w = max(1, int(round(w * TARGET_H / h)))
+                    if new_w > MAX_W:
+                        new_w = MAX_W
+                        new_h = max(1, int(round(h * MAX_W / w)))
+                    else:
+                        new_h = TARGET_H
+                    img = img.resize((new_w, new_h), Image.LANCZOS)
+                    icon = ImageTk.PhotoImage(img)
+            except Exception:
+                icon = None
+            if icon is None:
+                icon = self._make_source_badge(color, initials)
+            self._source_icons[key] = icon
+
+        # State vars — all sources now toggleable, no defaults enabled so the
+        # user must pick at least one.
+        self.src_geo_var = tk.BooleanVar(value=True)
+        self.src_archs4_var = tk.BooleanVar(value=False)
+        self.src_cellxgene_var = tk.BooleanVar(value=False)
+        self.src_atlas_var = tk.BooleanVar(value=False)
+
+        # ═══ STAGE 1 ═══ Pick data sources ─────────────────────────────
+        ttk.Label(self.step1_content,
+                  text="1.  Select data sources",
+                  font=('Segoe UI', 10, 'bold'),
+                  foreground=AERO.get("accent_dark", "#1565C0")
+                  ).grid(row=0, column=0, columnspan=2, sticky=tk.W,
+                         pady=(4, 2))
+
+        src_frame = ttk.Frame(self.step1_content)
+        src_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        def _add_source(parent, key, text, tooltip, var, on_toggle):
+            wrapper = ttk.Frame(parent)
+            wrapper.pack(side=tk.LEFT, padx=6)
+            icon = self._source_icons.get(key)
+            if icon is not None:
+                lbl = ttk.Label(wrapper, image=icon)
+                lbl.pack(side=tk.LEFT, padx=(0, 2))
+                self._set_tooltip(lbl, tooltip)
+            cb = ttk.Checkbutton(wrapper, text=text, variable=var,
+                                  command=on_toggle)
+            cb.pack(side=tk.LEFT)
+            self._set_tooltip(cb, tooltip)
+            return cb
+
+        _add_source(src_frame, "geo", "GEOmetadb",
+            "GEOmetadb (NCBI GEO mirror)\n"
+            "• SQLite snapshot of NCBI GEO — microarray & bulk RNA-seq\n"
+            "• ~4M samples across ~150k experiments (GSE/GSM)\n"
+            "• Source of sample-level metadata used in Step 2\n"
+            "• Sub-filter: GPL platform IDs (e.g. GPL570).",
+            self.src_geo_var, lambda: self._refresh_step1_subfilters())
+
+        _add_source(src_frame, "archs4", "ARCHS4",
+            "ARCHS4 (Ma'ayan Lab)\n"
+            "• Uniformly reprocessed bulk RNA-seq from GEO/SRA\n"
+            "• Human (~720 k samples) + mouse (~400 k samples)\n"
+            "• Remote HDF5 range-reads — no 30 GB download\n"
+            "• Sub-filter: organism (human / mouse).",
+            self.src_archs4_var, lambda: self._refresh_step1_subfilters())
+
+        _add_source(src_frame, "cellxgene", "CELLxGENE",
+            "CELLxGENE Discover Census (CZI)\n"
+            "• Curated scRNA-seq datasets (~50M+ cells)\n"
+            "• Harmonised schema (tissue / disease / assay / cell_type)\n"
+            "• Sub-filters: tissue, disease, assay (match the Discover UI).",
+            self.src_cellxgene_var, lambda: self._refresh_step1_subfilters())
+
+        _add_source(src_frame, "atlas", "Expression Atlas",
+            "Expression Atlas (EMBL-EBI)\n"
+            "• Curated differential-expression experiments\n"
+            "• Bulk RNA-seq, microarray, proteomics, single-cell\n"
+            "• Sub-filter: species (e.g. 'Homo sapiens', 'Mus musculus').",
+            self.src_atlas_var, lambda: self._refresh_step1_subfilters())
+
+        # ═══ STAGE 2 ═══ Per-source sub-filters (conditional) ──────────
+        self._step1_stage2_header = ttk.Label(
+            self.step1_content,
+            text="2.  Platform / sub-filters (optional — narrow the search)",
+            font=('Segoe UI', 10, 'bold'),
+            foreground=AERO.get("accent_dark", "#1565C0"))
+        self._step1_stage2_header.grid(row=2, column=0, columnspan=2,
+                                        sticky=tk.W, pady=(10, 2))
+
+        self._step1_subfilter_frame = ttk.Frame(self.step1_content)
+        self._step1_subfilter_frame.grid(row=3, column=0, columnspan=2,
+                                          sticky=tk.EW, pady=2)
+        self._step1_subfilter_frame.grid_columnconfigure(1, weight=1)
+
+        # Each source's sub-filter group is a named Frame that we pack / forget
+        # depending on whether that source's checkbox is on.
+
+        # GEO — GPL platform filter (reuse the existing name platform_entry)
+        self._sf_geo = ttk.Frame(self._step1_subfilter_frame)
+        ttk.Label(self._sf_geo, text="GPL IDs (comma):",
+                  width=18).pack(side=tk.LEFT)
+        self.platform_entry = ttk.Entry(self._sf_geo, width=40)
+        self.platform_entry.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+        self._set_tooltip(self.platform_entry,
+            "Limit GEOmetadb results to these platform IDs "
+            "(e.g. GPL570, GPL96, GPL11154). Leave blank for all platforms.")
+
+        # ARCHS4 — organism radio
+        self._sf_archs4 = ttk.Frame(self._step1_subfilter_frame)
+        ttk.Label(self._sf_archs4, text="Organism:",
+                  width=18).pack(side=tk.LEFT)
+        self.archs4_org_var = tk.StringVar(value="human")
+        ttk.Radiobutton(self._sf_archs4, text="Human",
+                        variable=self.archs4_org_var, value="human"
+                        ).pack(side=tk.LEFT, padx=4)
+        ttk.Radiobutton(self._sf_archs4, text="Mouse",
+                        variable=self.archs4_org_var, value="mouse"
+                        ).pack(side=tk.LEFT, padx=4)
+
+        # CELLxGENE has no sub-filter — keywords alone drive its faceted search
+        self._sf_cellxgene = None
+
+        # Expression Atlas — species
+        self._sf_atlas = ttk.Frame(self._step1_subfilter_frame)
+        ttk.Label(self._sf_atlas, text="Species:",
+                  width=18).pack(side=tk.LEFT)
+        self.atlas_species_entry = ttk.Entry(self._sf_atlas, width=40)
+        self.atlas_species_entry.pack(side=tk.LEFT, padx=4,
+                                       fill=tk.X, expand=True)
+        self._set_tooltip(self.atlas_species_entry,
+            "Expression Atlas species filter "
+            "(e.g. 'Homo sapiens', 'Mus musculus', 'Arabidopsis thaliana'). "
+            "Leave blank for all species.")
+
+        # Info label that shows when no sub-filter is applicable
+        self._sf_empty = ttk.Label(self._step1_subfilter_frame,
+            text="(select at least one source above)",
+            font=('Segoe UI', 9, 'italic'),
+            foreground=AERO.get("muted", "gray"))
+
+        # ═══ STAGE 3 ═══ Keywords + search button ──────────────────────
+        ttk.Label(self.step1_content,
+                  text="3.  Keywords (comma-separated)",
+                  font=('Segoe UI', 10, 'bold'),
+                  foreground=AERO.get("accent_dark", "#1565C0")
+                  ).grid(row=4, column=0, columnspan=2, sticky=tk.W,
+                         pady=(10, 2))
+
+        kw_row = ttk.Frame(self.step1_content)
+        kw_row.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=2)
+        kw_row.grid_columnconfigure(1, weight=1)
+        ttk.Label(kw_row, text="Keywords:",
+                  width=18).grid(row=0, column=0, sticky=tk.W)
+        self.filter_entry = ttk.Entry(kw_row)
+        self.filter_entry.grid(row=0, column=1, sticky=tk.EW, padx=4)
+        self._set_tooltip(self.filter_entry,
+            "Comma-separated search terms. Applied to every selected "
+            "source. Matches titles, descriptions and curated metadata.")
+
         s1_btn_frame = ttk.Frame(self.step1_content)
-        s1_btn_frame.grid(row=2, column=0, columnspan=2, pady=8)
-        
-        tk.Button(s1_btn_frame, text="  Search GEO Database  ", command=self.start_extraction, bg="#2E7D32", fg="white", font=('Segoe UI', 11, 'bold'), padx=20, pady=8, cursor="hand2", relief=tk.RAISED, bd=2).pack(side=tk.LEFT, padx=10)
+        s1_btn_frame.grid(row=7, column=0, columnspan=2, pady=8)
+        self._step1_search_btn = ttk.Button(
+            s1_btn_frame, text="Search Selected Sources",
+            command=self.start_extraction,
+            style="Add.TButton")
+        self._step1_search_btn.pack(side=tk.LEFT, padx=10)
+
+        self.step1_content.grid_columnconfigure(0, weight=1)
+        self.step1_content.grid_columnconfigure(1, weight=1)
+
+        # Initial population of sub-filter frames + active-icons strip
+        self._refresh_step1_subfilters()
         
         self.gse_frame = ttk.LabelFrame(self._main_sf, text=" Step 1.5: Selected Experiments for Analysis", padding=10)
-        
+        self._step15_title = "Step 1.5: Selected Experiments for Analysis"
+        self._set_step_status(self.gse_frame, self._step15_title, "pending")
+
         gse_info = ttk.Label(self.gse_frame, text="These experiments will be used for Step 2 extraction", font=('Segoe UI', 9, 'italic'), foreground='gray')
         gse_info.pack(fill=tk.X, pady=(0, 5))
         
@@ -9955,36 +11542,31 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         gse_btn_frame = ttk.Frame(self.gse_frame)
         gse_btn_frame.pack(fill=tk.X, pady=5)
         gse_btn_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="gsebtn")
-        
-        _gse_font = ('Segoe UI', 9, 'bold')
-        
-        tk.Button(gse_btn_frame, text="Save Selected for Step 2", command=self._save_selected_gses,
-                  bg="#1565C0", fg="white", font=_gse_font, height=2,
-                  relief=tk.RAISED, bd=2, cursor="hand2").grid(row=0, column=0, padx=4, pady=3, sticky="ew")
-        
-        tk.Button(gse_btn_frame, text="Select All",
-                  command=lambda: self.gse_listbox.select_set(0, tk.END),
-                  bg="#546E7A", fg="white", font=_gse_font, height=2,
-                  relief=tk.RAISED, bd=2, cursor="hand2").grid(row=0, column=1, padx=4, pady=3, sticky="ew")
-        
-        tk.Button(gse_btn_frame, text="Clear Selection",
-                  command=lambda: self.gse_listbox.selection_clear(0, tk.END),
-                  bg="#78909C", fg="white", font=_gse_font, height=2,
-                  relief=tk.RAISED, bd=2, cursor="hand2").grid(row=0, column=2, padx=4, pady=3, sticky="ew")
-        
-        tk.Button(gse_btn_frame, text="Review Details", command=self._review_gse_details,
-                  bg="#00796B", fg="white", font=_gse_font, height=2,
-                  relief=tk.RAISED, bd=2, cursor="hand2").grid(row=0, column=3, padx=4, pady=3, sticky="ew")
+
+        ttk.Button(gse_btn_frame, text="Save Selected for Step 2",
+                   command=self._save_selected_gses,
+                   style="Primary.TButton").grid(row=0, column=0, padx=6, pady=4, sticky="ew")
+
+        ttk.Button(gse_btn_frame, text="Select All",
+                   command=lambda: self.gse_listbox.select_set(0, tk.END),
+                   style="Secondary.TButton").grid(row=0, column=1, padx=6, pady=4, sticky="ew")
+
+        ttk.Button(gse_btn_frame, text="Clear Selection",
+                   command=lambda: self.gse_listbox.selection_clear(0, tk.END),
+                   style="Destructive.TButton").grid(row=0, column=2, padx=6, pady=4, sticky="ew")
+
+        ttk.Button(gse_btn_frame, text="Review Details",
+                   command=self._review_gse_details,
+                   style="Secondary.TButton").grid(row=0, column=3, padx=6, pady=4, sticky="ew")
 
         # Row 2: Download Expression Data button (spans full width)
-        gse_btn_frame.columnconfigure(4, weight=1, uniform="gsebtn")
-        self._download_expr_btn = tk.Button(
+        self._download_expr_btn = ttk.Button(
             gse_btn_frame,
             text="Download Expression Data for Selected Experiments",
             command=self._download_selected_expression,
-            bg="#E65100", fg="white", font=_gse_font, height=2,
-            relief=tk.RAISED, bd=2, cursor="hand2")
-        self._download_expr_btn.grid(row=1, column=0, columnspan=4, padx=4, pady=3, sticky="ew")
+            style="Warn.TButton")
+        self._download_expr_btn.grid(row=1, column=0, columnspan=4,
+                                      padx=6, pady=4, sticky="ew")
 
         # Download progress
         self._dl_progress_frame = ttk.Frame(self.gse_frame)
@@ -9994,39 +11576,35 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._dl_progress_label.pack(anchor='w', padx=5)
         lab_frame = ttk.LabelFrame(self._main_sf, text=" Step 2: Sample Classification & Analysis", padding=10)
         lab_frame.pack(fill=tk.X, padx=5, pady=5)
+        self._step2_frame = lab_frame
+        self._step2_title = "Step 2: Sample Classification & Analysis"
+        self._set_step_status(lab_frame, self._step2_title, "pending")
         
         self.step2_status_label = ttk.Label(lab_frame, text="Ready to extract labels from Step 1 or external file", foreground="blue", font=('Segoe UI', 9))
         self.step2_status_label.pack(pady=5)
         
         btn_row = ttk.Frame(lab_frame)
-        btn_row.pack(pady=8)
+        btn_row.pack(pady=8, fill=tk.X)
         # Use grid for perfect symmetry
         btn_row.columnconfigure((0, 1, 2), weight=1, uniform="step2btn")
-        
-        _s2_font = ('Segoe UI', 10, 'bold')
-        _s2_w = 22
-        _s2_h = 2
-        
-        self.load_csv_btn = tk.Button(
-            btn_row, text="  Load External CSV  ", command=self.load_external_file_for_step2,
-            bg="#00796B", fg="white", font=_s2_font, width=_s2_w, height=_s2_h,
-            relief=tk.RAISED, bd=2, cursor="hand2")
-        self.load_csv_btn.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-        self._add_button_hover(self.load_csv_btn, "#00695C", "#00796B")
-        
-        self.ai_label_btn = tk.Button(
-            btn_row, text="  LLM Extraction  ", command=self._open_llm_extraction_window,
-            bg="#1565C0", fg="white", font=_s2_font, width=_s2_w, height=_s2_h,
-            relief=tk.RAISED, bd=2, cursor="hand2")
-        self.ai_label_btn.grid(row=0, column=1, padx=6, pady=4, sticky="ew")
-        self._add_button_hover(self.ai_label_btn, "#0D47A1", "#1565C0")
-        
-        self.manual_label_btn = tk.Button(
-            btn_row, text="  Manual Labeling  ", command=self.run_manual_labeling,
-            bg="#2E7D32", fg="white", font=_s2_font, width=_s2_w, height=_s2_h,
-            relief=tk.RAISED, bd=2, cursor="hand2")
-        self.manual_label_btn.grid(row=0, column=2, padx=6, pady=4, sticky="ew")
-        self._add_button_hover(self.manual_label_btn, "#1B5E20", "#2E7D32")
+
+        self.load_csv_btn = ttk.Button(
+            btn_row, text="Load External CSV",
+            command=self.load_external_file_for_step2,
+            style="Tool.TButton")
+        self.load_csv_btn.grid(row=0, column=0, padx=8, pady=6, sticky="ew")
+
+        self.ai_label_btn = ttk.Button(
+            btn_row, text="LLM Extraction",
+            command=self._open_llm_extraction_window,
+            style="Primary.TButton")
+        self.ai_label_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
+
+        self.manual_label_btn = ttk.Button(
+            btn_row, text="Manual Labeling",
+            command=self.run_manual_labeling,
+            style="ToolGreen.TButton")
+        self.manual_label_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
 
         
 
@@ -10067,21 +11645,98 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         log_container = ttk.Frame(self.log_window)
         log_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
-        
-        self.log_text = tk.Text(log_container, wrap=tk.WORD, font=('Consolas', 9), bg='#F5F5F5')
+
+        # Professional light/corporate-style log widget: soft off-white
+        # background, monospace font, timestamps, color-coded category
+        # chips, zebra-striped row backgrounds for clean separation.
+        self.log_text = tk.Text(
+            log_container,
+            wrap=tk.WORD,
+            font=('Cascadia Mono', 10),   # falls back to Consolas if absent
+            bg='#FAFBFC',                  # page-off-white
+            fg='#24292F',                  # charcoal body text
+            insertbackground='#24292F',
+            selectbackground='#D0E4FF',
+            selectforeground='#1C2128',
+            spacing1=2, spacing3=2,        # extra leading/trailing per line
+            padx=10, pady=8,
+            borderwidth=1, highlightthickness=0,
+            relief='solid',
+        )
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb_log = ttk.Scrollbar(log_container, command=self.log_text.yview)
         sb_log.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=sb_log.set)
-        
-        self.log_text.tag_configure("error", foreground="red", font=('Consolas', 9, 'bold'))
-        self.log_text.tag_configure("warning", foreground="orange", font=('Consolas', 9, 'bold'))
-        self.log_text.tag_configure("info", foreground="green")
-        self.log_text.tag_configure("header", foreground="blue", font=('Consolas', 9, 'bold'))
+
+        # ── Tag palette ────────────────────────────────────────────────
+        # Base content styles (light theme, good contrast on off-white)
+        self.log_text.tag_configure("ts",       foreground='#6E7781',
+                                     font=('Cascadia Mono', 9))
+        self.log_text.tag_configure("level_info",    foreground='#1A7F37',
+                                     font=('Cascadia Mono', 10, 'bold'))
+        self.log_text.tag_configure("level_warn",    foreground='#9A6700',
+                                     font=('Cascadia Mono', 10, 'bold'))
+        self.log_text.tag_configure("level_err",     foreground='#CF222E',
+                                     font=('Cascadia Mono', 10, 'bold'))
+        self.log_text.tag_configure("body",          foreground='#24292F')
+        self.log_text.tag_configure("body_warn",     foreground='#7D4E00')
+        self.log_text.tag_configure("body_err",      foreground='#A40E26')
+
+        # Alternating row backgrounds (zebra) for clear separation
+        self.log_text.tag_configure("zebra_even", background='#FAFBFC')
+        self.log_text.tag_configure("zebra_odd",  background='#EEF2F6')
+
+        # Category color palette — each [CATEGORY] gets its own color
+        # (picked so they stay readable on the light zebra backgrounds).
+        self._log_cat_colors = {
+            'DB':             '#0969DA',  # blue
+            'Load':           '#116329',  # dark teal-green
+            'GEOmetadb':      '#0550AE',  # deeper blue
+            'GPL Browser':    '#8250DF',  # purple
+            'GPL':            '#8250DF',
+            'GeneList':       '#6639BA',  # indigo
+            'XPlat':          '#BC4C00',  # dark orange
+            'Cache':          '#57606A',  # slate
+            'Startup':        '#1F6FEB',  # bright blue
+            'GSM→GSE':        '#0550AE',
+            'Species Picker': '#8250DF',
+            'Config':         '#57606A',
+            'SETUP':          '#9A6700',
+            'INFO':           '#1A7F37',
+            'WARNING':        '#9A6700',
+            'ERROR':          '#CF222E',
+        }
+        # Register the category tags once so inserts are fast
+        for cat, col in self._log_cat_colors.items():
+            tname = f"cat_{cat}"
+            self.log_text.tag_configure(
+                tname, foreground=col,
+                font=('Cascadia Mono', 10, 'bold'),
+            )
+        self.log_text.tag_configure("cat_default",
+                                     foreground='#1F6FEB',
+                                     font=('Cascadia Mono', 10, 'bold'))
+
+        # Legacy tag names — kept so other code that references them still works
+        self.log_text.tag_configure("error",
+                                     foreground='#CF222E',
+                                     font=('Cascadia Mono', 10, 'bold'))
+        self.log_text.tag_configure("warning",
+                                     foreground='#9A6700',
+                                     font=('Cascadia Mono', 10, 'bold'))
+        self.log_text.tag_configure("info",   foreground='#1A7F37')
+        self.log_text.tag_configure("header", foreground='#0969DA',
+                                     font=('Cascadia Mono', 10, 'bold'))
+
+        # Line-counter so the zebra stripes advance correctly
+        self._log_line_idx = 0
     
     def _add_button_hover(self, button, hover_color, normal_color):
-        """Adds Frutiger Aero hover effect to colored buttons.
-        Flattens the relief, applies a subtle border, and switches bg on hover."""
+        """Legacy hover helper for colored tk.Button widgets.
+
+        Retained so older sub-windows keep working; new buttons should use
+        the named ttk styles (Primary / Secondary / Destructive / Tool…),
+        which get correct hover via style.map() already."""
         try:
             button.configure(relief="flat", bd=0,
                               activebackground=hover_color,
@@ -10091,8 +11746,174 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                               highlightcolor=AERO["accent"])
         except Exception:
             pass
-        button.bind("<Enter>", lambda e: button.config(bg=hover_color))
-        button.bind("<Leave>", lambda e: button.config(bg=normal_color))
+        try:
+            button.bind("<Enter>", lambda e: button.config(bg=hover_color))
+            button.bind("<Leave>", lambda e: button.config(bg=normal_color))
+        except Exception:
+            pass
+
+    # ─── Tooltip helper ────────────────────────────────────────────
+    def _refresh_step1_subfilters(self):
+        """Show only the sub-filter frames whose source checkbox is ticked.
+
+        Also refreshes the "active sources" icon strip under stage 3 and
+        enables/disables the Search button based on whether at least one
+        source is selected.
+        """
+        # Map: (boolean_var, subfilter_frame_or_None, source_key)
+        # CELLxGENE has no sub-filter (entry is None) — it still counts toward
+        # any_on so the Search button enables, but no frame is packed for it.
+        mapping = [
+            (self.src_geo_var,        self._sf_geo,       "geo"),
+            (self.src_archs4_var,     self._sf_archs4,    "archs4"),
+            (self.src_cellxgene_var,  self._sf_cellxgene, "cellxgene"),
+            (self.src_atlas_var,      self._sf_atlas,     "atlas"),
+        ]
+        any_on = False
+        # Detach every subfilter frame first, then pack only the active ones
+        for _var, frame, _key in mapping:
+            if frame is None:
+                continue
+            try:
+                frame.pack_forget()
+            except Exception:
+                pass
+        try:
+            self._sf_empty.pack_forget()
+        except Exception:
+            pass
+        for var, frame, _key in mapping:
+            if var.get():
+                any_on = True
+                if frame is not None:
+                    frame.pack(fill=tk.X, padx=4, pady=2)
+        if not any_on:
+            self._sf_empty.pack(fill=tk.X, padx=4, pady=2)
+
+        # Toggle the Search button
+        try:
+            state = "normal" if any_on else "disabled"
+            self._step1_search_btn.configure(state=state)
+        except Exception:
+            pass
+
+    def _make_source_badge(self, color_hex: str, text: str, size: int = 20):
+        """Draw a small rounded-square badge icon with initials, return PhotoImage.
+
+        We render with PIL so we get anti-aliased rounded corners, then hand
+        the result to Tk via ``ImageTk.PhotoImage``. Falls back to ``None``
+        (label skipped) if PIL is unavailable.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont, ImageTk
+        except Exception:
+            return None
+        # Render at 4x then downscale for a smooth edge
+        scale = 4
+        w = h = size * scale
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        r = int(w * 0.22)  # corner radius
+        try:
+            d.rounded_rectangle([(0, 0), (w - 1, h - 1)],
+                                 radius=r, fill=color_hex)
+        except AttributeError:
+            # Pillow <8.2 — fall back to a plain rectangle
+            d.rectangle([(0, 0), (w - 1, h - 1)], fill=color_hex)
+        # Pick a font size that fits the badge
+        label = (text or "?")[:3]
+        target_px = int(h * 0.55)
+        font = None
+        for fname in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf",
+                      "arialbd.ttf", "Helvetica-Bold"):
+            try:
+                font = ImageFont.truetype(fname, target_px)
+                break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+        try:
+            bbox = d.textbbox((0, 0), label, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            tx = (w - tw) / 2 - bbox[0]
+            ty = (h - th) / 2 - bbox[1]
+        except AttributeError:
+            tw, th = d.textsize(label, font=font)
+            tx = (w - tw) / 2
+            ty = (h - th) / 2
+        d.text((tx, ty), label, fill="white", font=font)
+        img = img.resize((size, size), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+
+    def _set_tooltip(self, widget, text):
+        """Attach a lightweight hover tooltip to any widget.
+
+        Implemented as a tiny borderless Toplevel that appears on <Enter>
+        and is destroyed on <Leave>. Safe to call repeatedly (re-binds)."""
+        if not text:
+            return
+        state = {"tip": None, "after": None}
+
+        def _show(_e=None):
+            if state["tip"] is not None:
+                return
+            try:
+                x = widget.winfo_rootx() + 14
+                y = widget.winfo_rooty() + widget.winfo_height() + 6
+            except Exception:
+                return
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.attributes("-topmost", True)
+            try:
+                tip.wm_geometry(f"+{x}+{y}")
+            except Exception:
+                pass
+            frame = tk.Frame(tip, bg=AERO["accent_dark"], padx=1, pady=1)
+            frame.pack()
+            label = tk.Label(frame, text=text,
+                             bg="#FFFFFF", fg=AERO["text"],
+                             font=('Segoe UI', 9),
+                             padx=8, pady=4, justify="left",
+                             wraplength=340)
+            label.pack()
+            state["tip"] = tip
+
+        def _schedule(e=None):
+            _cancel()
+            state["after"] = widget.after(350, _show)
+
+        def _cancel(_e=None):
+            if state["after"] is not None:
+                try:
+                    widget.after_cancel(state["after"])
+                except Exception:
+                    pass
+                state["after"] = None
+            if state["tip"] is not None:
+                try:
+                    state["tip"].destroy()
+                except Exception:
+                    pass
+                state["tip"] = None
+
+        widget.bind("<Enter>", _schedule, add="+")
+        widget.bind("<Leave>", _cancel, add="+")
+        widget.bind("<ButtonPress>", _cancel, add="+")
+
+    # ─── Step status badge ─────────────────────────────────────────
+    def _set_step_status(self, frame, step_label, state="pending"):
+        """Update the status badge on a LabelFrame title.
+
+        state in {'pending', 'running', 'done', 'error'}.
+        """
+        glyph = {"pending": "○", "running": "◔",
+                 "done": "✓", "error": "✗"}.get(state, "○")
+        try:
+            frame.configure(text=f" {glyph}  {step_label}")
+        except Exception:
+            pass
 
     @staticmethod
     def _fit_window(win, fallback_w=900, fallback_h=700):
@@ -10218,14 +12039,25 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         return leg
     
     def _toggle_step1(self):
-        """Toggles Step 1 visibility."""
+        """Toggles Step 1 visibility + grows/shrinks the LabelFrame padding
+        so the collapsed state doesn't leave a blank white rectangle."""
         if self.step1_collapsed.get():
+            # Expand: show content and restore breathing room
+            try:
+                self.step1_frame.configure(padding=(10, 8, 10, 10))
+            except Exception:
+                pass
             self.step1_content.pack(fill=tk.X, pady=5)
-            self.step1_toggle_btn.config(text=" Hide")
+            self.step1_toggle_btn.config(text="▾  Hide")
             self.step1_collapsed.set(False)
         else:
+            # Collapse: hide content and tighten padding to kill the empty strip
             self.step1_content.pack_forget()
-            self.step1_toggle_btn.config(text=" Show")
+            try:
+                self.step1_frame.configure(padding=(8, 2, 8, 2))
+            except Exception:
+                pass
+            self.step1_toggle_btn.config(text="▸  Show")
             self.step1_collapsed.set(True)
     
     def _update_progress_label(self, event=None):
@@ -10267,16 +12099,53 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             try:
                 if maximum is not None:
                     self.progressbar["maximum"] = maximum
+                anim = getattr(self, '_animator', None)
+                maxv = self.progressbar["maximum"] or 100
                 if value is not None:
-                    self.progressbar["value"] = value
+                    # Liquid fill: interpolate when animator is available and we're
+                    # not snapping to 0 or to maximum (those should feel instant).
+                    if (anim is not None and value not in (0, maxv)
+                            and hasattr(self.progressbar, 'winfo_exists')):
+                        try:
+                            anim.smooth_to(self.progressbar, value)
+                        except Exception:
+                            self.progressbar["value"] = value
+                    else:
+                        self.progressbar["value"] = value
                     pct = value / max(1, self.progressbar["maximum"]) * 100
                     self.progress_label.config(text=f"{pct:.0f}%")
+
+                    # ── Shimmer animation: on while a task is active ──
+                    # Start the color pulse whenever the bar is neither idle (0)
+                    # nor complete (>=max). Stop it otherwise. Applies to every
+                    # process that funnels through update_progress — search,
+                    # downloads, analyses, labeling, etc.
+                    if anim is not None:
+                        try:
+                            active = (value > 0) and (value < maxv)
+                            if active and not getattr(self, "_main_bar_pulsing", False):
+                                anim.pulse_bar(
+                                    self.progressbar,
+                                    palette=_UIAnimator.PULSE_BLUES)
+                                self._main_bar_pulsing = True
+                            elif (not active) and getattr(self, "_main_bar_pulsing", False):
+                                anim.stop_pulse(self.progressbar)
+                                self._main_bar_pulsing = False
+                        except Exception:
+                            pass
                 if text is not None:
                     self.progress_status.config(text=text)
                 if value == 0 or (value is not None and value >= self.progressbar["maximum"]):
                     if value == 0:
                         self.progress_status.config(text="")
                         self.progress_label.config(text="0%")
+                        # Stop any lingering pulse animation on the main bar
+                        try:
+                            if anim is not None:
+                                anim.stop_pulse(self.progressbar)
+                                self._main_bar_pulsing = False
+                        except Exception:
+                            pass
             except Exception:
                 pass
         try:
@@ -10342,10 +12211,14 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         has_available = bool(available)
 
         if not has_loaded and not has_available:
-            self.loaded_plat_label.config(text="No platforms loaded yet", foreground="orange")
-            self.gene_explorer_btn.config(state=tk.DISABLED)
-            self.compare_btn.config(state=tk.DISABLED)
-            self.dist_class_btn.config(state=tk.DISABLED)
+            self.loaded_plat_label.config(text="No platforms loaded yet",
+                                           foreground=AERO["warn"])
+            # Tools stay enabled — each one can quick-load on demand.
+            self.gene_explorer_btn.config(state=tk.NORMAL)
+            self.compare_btn.config(state=tk.NORMAL)
+            self.dist_class_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'label_enrich_btn'):
+                self.label_enrich_btn.config(state=tk.NORMAL)
         elif not has_loaded and has_available:
             # Files on disk but nothing fully loaded — Gene Explorer can quick-load genes
             avail_list = ', '.join(sorted(available.keys())[:6])
@@ -10353,30 +12226,42 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             self.loaded_plat_label.config(
                 text=f"No platforms fully loaded | {len(available)} available on disk: {avail_list}{extra}\n"
                      f"Use Gene Distribution Explorer for quick gene-only loading",
-                foreground="#E65100")
+                foreground=AERO["warn"])
             self.gene_explorer_btn.config(state=tk.NORMAL)
             self.compare_btn.config(state=tk.NORMAL)
             self.dist_class_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'label_enrich_btn'):
+                self.label_enrich_btn.config(state=tk.NORMAL)
         else:
             plat_names = []
             total_samples = 0
-            
+
             for plat_name, plat_df in self.gpl_datasets.items():
                 samples = len(plat_df)
                 total_samples += samples
                 plat_names.append(f"{plat_name} ({samples:,} samples)")
-            
+
             n_extra = len(available) - len(self.gpl_datasets)
             extra_text = f" | {n_extra} more available on disk" if n_extra > 0 else ""
-            status_text = (f"OK Loaded {len(self.gpl_datasets)} platform(s): "
+            status_text = (f"✓ Loaded {len(self.gpl_datasets)} platform(s): "
                           + ", ".join(plat_names)
                           + f"\nTotal: {total_samples:,} samples{extra_text}")
-            
-            self.loaded_plat_label.config(text=status_text, foreground="green")
-            
+
+            self.loaded_plat_label.config(text=status_text,
+                                           foreground=AERO["green_dark"])
+
             self.gene_explorer_btn.config(state=tk.NORMAL)
             self.compare_btn.config(state=tk.NORMAL)
             self.dist_class_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'label_enrich_btn'):
+                self.label_enrich_btn.config(state=tk.NORMAL)
+
+            # Platforms fully loaded → Step 2 is ready / complete
+            try:
+                if hasattr(self, '_step2_frame'):
+                    self._set_step_status(self._step2_frame, self._step2_title, "done")
+            except Exception:
+                pass
 
         # Refresh platform load buttons after any status change
         try:
@@ -10591,6 +12476,17 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                     font=('Segoe UI', 9, 'bold'), width=16, height=2,
                                     cursor="hand2", relief=tk.RAISED)
                 btn.pack()
+
+                # Badge for CELLxGENE-derived platforms: labels already exist
+                # (Cell Ontology) so no LLM extraction is needed downstream.
+                if plat.startswith("CellxGene_"):
+                    tk.Label(bf,
+                             text="✓ Pre-classified\n(CELLxGENE Cell Ontology)",
+                             bg="#E3F2FD", fg="#0D47A1",
+                             font=('Segoe UI', 7, 'bold'),
+                             relief=tk.SOLID, borderwidth=1,
+                             justify=tk.CENTER,
+                             padx=2, pady=1).pack(fill=tk.X, pady=(2, 0))
 
     def _load_custom_gpl_data(self):
         """Load a custom GPL dataset with validation."""
@@ -10939,9 +12835,35 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         Also shows union / intersection tabs when >1 platform is selected.
         Includes a search/filter box and 'Save CSV' / 'Copy' actions.
         """
+        try:
+            self.enqueue_log("[GeneList] 'Show Gene List' clicked")
+        except Exception:
+            pass
+
+        # Visible feedback on the popup itself so the user sees something
+        # happen immediately, even before the window is built.
+        feedback_lbl = getattr(popup, '_gene_list_feedback', None)
+        if feedback_lbl is None or not feedback_lbl.winfo_exists():
+            try:
+                feedback_lbl = tk.Label(
+                    popup,
+                    text="",
+                    font=('Segoe UI', 10, 'bold'),
+                    fg='#00796B',
+                    bg=popup.cget('bg') if hasattr(popup, 'cget') else '#F0F0F0',
+                )
+                feedback_lbl.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 4))
+                popup._gene_list_feedback = feedback_lbl
+            except Exception:
+                feedback_lbl = None
+
         sel_vars = getattr(popup, 'gpl_selection_vars', {})
         selected = [plat for plat, var in sel_vars.items() if var.get()]
         if not selected:
+            try:
+                self.enqueue_log("[GeneList] No platforms selected.")
+            except Exception:
+                pass
             messagebox.showinfo(
                 "No Platforms Selected",
                 "Please tick at least one platform checkbox above, "
@@ -10950,23 +12872,87 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             )
             return
 
+        if feedback_lbl is not None:
+            try:
+                self._animator.spinner(
+                    feedback_lbl,
+                    f"Collecting genes from {len(selected)} platform(s)...",
+                    color='#00796B',
+                )
+            except Exception:
+                try:
+                    feedback_lbl.config(
+                        text=f"Collecting genes from {len(selected)} platform(s)...")
+                except Exception:
+                    pass
+
         available = self._discover_available_platforms()
 
         # Collect gene lists per platform
         gene_lists = {}
-        for plat in selected:
-            # Prefer an already-loaded dataset (canonical column order)
-            if plat in self.gpl_datasets:
+        try:
+            for plat in selected:
+                # Prefer an already-loaded dataset (canonical column order)
+                if plat in self.gpl_datasets:
+                    try:
+                        from genevariate.config import METADATA_EXCLUSIONS
+                    except Exception:
+                        METADATA_EXCLUSIONS = {'GSM'}
+                    exclude_upper = {s.upper() for s in METADATA_EXCLUSIONS}
+                    cols = list(self.gpl_datasets[plat].columns)
+                    gene_lists[plat] = [c for c in cols if c.upper() not in exclude_upper]
+                else:
+                    fpath = available.get(plat)
+                    gene_lists[plat] = self._read_gene_columns_from_csv(fpath)
+        except Exception as exc:
+            try:
+                self._animator.stop(feedback_lbl) if feedback_lbl is not None else None
+            except Exception:
+                pass
+            try:
+                self.enqueue_log(f"[GeneList] Failed to collect gene columns: {exc}")
+            except Exception:
+                pass
+            messagebox.showerror(
+                "Gene List Error",
+                f"Could not collect gene lists:\n{exc}",
+                parent=popup,
+            )
+            return
+
+        try:
+            summary = ", ".join(f"{p}={len(g):,}" for p, g in gene_lists.items())
+            self.enqueue_log(f"[GeneList] Collected: {summary}")
+        except Exception:
+            pass
+
+        # If every platform returned zero genes, tell the user plainly rather
+        # than opening an empty window they might not even see.
+        if not any(gene_lists.values()):
+            if feedback_lbl is not None:
                 try:
-                    from genevariate.config import METADATA_EXCLUSIONS
+                    self._animator.stop(feedback_lbl)
+                    feedback_lbl.config(
+                        text="No gene columns could be extracted from the selected platform(s).",
+                        fg='#C62828',
+                    )
                 except Exception:
-                    METADATA_EXCLUSIONS = {'GSM'}
-                exclude_upper = {s.upper() for s in METADATA_EXCLUSIONS}
-                cols = list(self.gpl_datasets[plat].columns)
-                gene_lists[plat] = [c for c in cols if c.upper() not in exclude_upper]
-            else:
-                fpath = available.get(plat)
-                gene_lists[plat] = self._read_gene_columns_from_csv(fpath)
+                    pass
+            try:
+                self.enqueue_log(
+                    "[GeneList] No gene columns found. "
+                    "Is the CSV loaded / available on disk?"
+                )
+            except Exception:
+                pass
+            messagebox.showwarning(
+                "No Genes Found",
+                "No gene columns were found for the selected platform(s).\n\n"
+                "The platform may not be loaded yet, or the CSV file could not "
+                "be read. Check the Activity Log for details.",
+                parent=popup,
+            )
+            return
 
         # Build the window
         win = tk.Toplevel(popup)
@@ -10977,7 +12963,64 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             win.geometry(f"780x640+{(_sw-780)//2}+{(_sh-640)//2}")
         except Exception:
             pass
-        win.transient(popup)
+        try:
+            win.transient(popup)
+        except Exception:
+            pass
+        # Force the window to the front so the user actually sees it —
+        # Toplevel windows sometimes open behind the parent popup.
+        try:
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+            win.attributes('-topmost', True)
+            # Release topmost shortly after so it doesn't cover other dialogs
+            win.after(350, lambda w=win: (w.attributes('-topmost', False)
+                                          if w.winfo_exists() else None))
+        except Exception:
+            pass
+
+        # Stop the popup spinner now that the window is open
+        if feedback_lbl is not None:
+            try:
+                self._animator.stop(feedback_lbl)
+                feedback_lbl.config(
+                    text=f"Gene list window opened for {len(selected)} platform(s).",
+                    fg='#1B5E20',
+                )
+                self._animator.flash(feedback_lbl, '#2E7D32', revert_to='#1B5E20')
+            except Exception:
+                pass
+
+        # Compute per-gene coverage across the selected platforms (used in
+        # every tab so the user sees gene context, not just names).
+        # Coverage = how many of the selected platforms contain each gene.
+        upper_sets = {p: {g.upper() for g in gs}
+                      for p, gs in gene_lists.items()}
+        first_seen = {}  # UPPER -> original-case display symbol
+        for plat in selected:
+            for g in gene_lists.get(plat, []):
+                first_seen.setdefault(g.upper(), g)
+
+        all_upper = set().union(*upper_sets.values()) if upper_sets else set()
+        gene_platforms = {}   # UPPER -> sorted list of platform names containing it
+        for u in all_upper:
+            gene_platforms[u] = sorted(
+                [p for p, s in upper_sets.items() if u in s]
+            )
+
+        n_total = len(selected)
+
+        def _row(u, plat_list_override=None):
+            """Build one display row for gene UPPER key u."""
+            symbol = first_seen[u]
+            plats = plat_list_override if plat_list_override is not None else gene_platforms[u]
+            return {
+                'symbol':   symbol,
+                'coverage': f"{len(plats)}/{n_total}",
+                'n_cov':    len(plats),
+                'platforms': ", ".join(plats),
+            }
 
         # Search/filter bar (applies to whichever tab is active)
         search_frame = ttk.Frame(win, padding=8)
@@ -10993,43 +13036,99 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         nb = ttk.Notebook(win)
         nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        # --- per-tab state so filter can update the right listbox ---
-        tabs = {}  # tab_key -> {'listbox': lb, 'all_genes': [...]}
+        # --- per-tab state so filter can update the right treeview ---
+        # tabs[label] = {'tree': Treeview, 'rows': [row_dict, ...]}
+        tabs = {}
 
-        def _make_tab(label, genes):
+        # Color tags for coverage (applied to Union tab rows)
+        def _coverage_color(n_cov):
+            if n_total <= 1:
+                return '#263238'
+            frac = n_cov / n_total
+            if frac >= 1.0:
+                return '#1B5E20'     # all platforms — dark green
+            if frac >= 0.67:
+                return '#2E7D32'     # most — green
+            if frac >= 0.34:
+                return '#EF6C00'     # some — orange
+            return '#B71C1C'         # few — red
+
+        def _make_tab(label, rows, sort_key=None):
+            """Create a Treeview tab.
+            rows: list of dicts (from _row).
+            sort_key: optional fn(row)->key for initial ordering; default = name.
+            """
             frame = ttk.Frame(nb, padding=6)
             nb.add(frame, text=label)
-            lb = tk.Listbox(frame, font=('Consolas', 10), activestyle='dotbox',
-                            selectmode=tk.EXTENDED)
-            vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=lb.yview)
-            lb.configure(yscrollcommand=vsb.set)
-            lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            cols = ("idx", "gene", "coverage", "platforms")
+            tree = ttk.Treeview(frame, columns=cols, show="headings",
+                                selectmode="extended", height=20)
+            tree.heading("idx", text="#")
+            tree.heading("gene", text="Gene symbol")
+            tree.heading("coverage", text="Coverage")
+            tree.heading("platforms", text="Platform(s)")
+            tree.column("idx", width=60, anchor=tk.CENTER, stretch=False)
+            tree.column("gene", width=160, anchor=tk.W, stretch=False)
+            tree.column("coverage", width=90, anchor=tk.CENTER, stretch=False)
+            tree.column("platforms", width=360, anchor=tk.W, stretch=True)
+
+            vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
+            hsb = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             vsb.pack(side=tk.RIGHT, fill=tk.Y)
-            for g in genes:
-                lb.insert(tk.END, g)
-            tabs[label] = {'listbox': lb, 'all_genes': list(genes)}
 
-        # Per-platform tabs
+            # Styling: bigger row height + visible row borders, like the
+            # GPL list. Apply the same style to every tab so they match.
+            try:
+                _gst = ttk.Style()
+                _gst.configure("GeneList.Treeview",
+                               rowheight=24, borderwidth=1, relief="solid")
+                _gst.configure("GeneList.Treeview.Heading",
+                               font=('Segoe UI', 10, 'bold'))
+                tree.configure(style="GeneList.Treeview")
+            except Exception:
+                pass
+
+            # Zebra-stripe backgrounds so each row is clearly separated
+            tree.tag_configure("row_even", background='#FFFFFF')
+            tree.tag_configure("row_odd",  background='#F0F4F8')
+
+            # Configure coverage color tags per tree
+            for n_cov in range(0, n_total + 1):
+                tag = f"cov_{n_cov}"
+                tree.tag_configure(tag, foreground=_coverage_color(n_cov))
+
+            ordered = sorted(rows, key=sort_key) if sort_key else rows
+            tabs[label] = {'tree': tree, 'rows': ordered}
+
+        # ── Per-platform tabs (keep CSV column order; coverage shows how
+        #    widespread each gene is across the other selected platforms) ──
         for plat in selected:
-            genes = gene_lists.get(plat, [])
-            _make_tab(f"{plat} ({len(genes):,})", genes)
+            genes_in_order = gene_lists.get(plat, [])
+            plat_rows = []
+            for i, g in enumerate(genes_in_order, start=1):
+                u = g.upper()
+                if u not in first_seen:
+                    # Paranoia: platform-local gene that somehow missed first_seen
+                    first_seen[u] = g
+                    gene_platforms[u] = [plat]
+                plat_rows.append(_row(u))
+            _make_tab(f"{plat} ({len(plat_rows):,})", plat_rows)  # no re-sort
 
-        # Union / intersection tabs (only if >1 platform)
+        # ── Union / intersection tabs (only if >1 platform) ──
         if len(selected) > 1:
-            upper_sets = {p: {g.upper() for g in gs}
-                          for p, gs in gene_lists.items()}
-            # keep display case from the first platform a gene appears in
-            first_seen = {}
-            for plat in selected:
-                for g in gene_lists.get(plat, []):
-                    first_seen.setdefault(g.upper(), g)
+            # Union: every gene in any platform, sorted by coverage desc then name
+            union_rows = [_row(u) for u in all_upper]
+            _make_tab(f"Union ({len(union_rows):,})", union_rows,
+                      sort_key=lambda r: (-r['n_cov'], r['symbol'].upper()))
 
-            union_upper = set().union(*upper_sets.values()) if upper_sets else set()
+            # Intersection: genes in ALL platforms (coverage = n_total/n_total)
             inter_upper = set.intersection(*upper_sets.values()) if upper_sets else set()
-            union = sorted({first_seen[u] for u in union_upper}, key=str.upper)
-            inter = sorted({first_seen[u] for u in inter_upper}, key=str.upper)
-            _make_tab(f"Union ({len(union):,})", union)
-            _make_tab(f"Intersection ({len(inter):,})", inter)
+            inter_rows = [_row(u) for u in inter_upper]
+            _make_tab(f"Intersection ({len(inter_rows):,})", inter_rows,
+                      sort_key=lambda r: r['symbol'].upper())
 
         # --- Filter handler ---
         def _current_tab_key():
@@ -11038,22 +13137,34 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             except tk.TclError:
                 return None
 
+        def _repopulate(tree, rows, q_upper):
+            tree.delete(*tree.get_children())
+            shown = 0
+            for row in rows:
+                if q_upper and q_upper not in row['symbol'].upper() \
+                        and q_upper not in row['platforms'].upper():
+                    continue
+                shown += 1
+                tag = f"cov_{row['n_cov']}"
+                stripe = "row_odd" if shown % 2 else "row_even"
+                tree.insert("", tk.END,
+                            values=(shown,
+                                    row['symbol'],
+                                    row['coverage'],
+                                    row['platforms']),
+                            tags=(tag, stripe))
+            return shown
+
         def _apply_filter(*_):
             key = _current_tab_key()
             if key not in tabs:
                 return
             q = search_var.get().strip().upper()
-            lb = tabs[key]['listbox']
-            all_genes = tabs[key]['all_genes']
-            lb.delete(0, tk.END)
-            if q:
-                shown = [g for g in all_genes if q in g.upper()]
-            else:
-                shown = all_genes
-            for g in shown:
-                lb.insert(tk.END, g)
+            tree = tabs[key]['tree']
+            rows = tabs[key]['rows']
+            shown = _repopulate(tree, rows, q)
             status_lbl.config(
-                text=f"{len(shown):,} of {len(all_genes):,} genes shown"
+                text=f"{shown:,} of {len(rows):,} genes shown"
             )
 
         search_var.trace_add('write', _apply_filter)
@@ -11061,33 +13172,49 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         _apply_filter()
 
         # --- Actions: copy + save ---
-        def _copy_current():
+        def _selected_or_all_rows():
             key = _current_tab_key()
             if key not in tabs:
+                return [], key
+            tree = tabs[key]['tree']
+            rows = tabs[key]['rows']
+            sel_ids = tree.selection()
+            if sel_ids:
+                # Map tree items back to rows by their displayed symbol
+                selected_symbols = {tree.item(i, 'values')[1] for i in sel_ids}
+                picked = [r for r in rows if r['symbol'] in selected_symbols]
+            else:
+                # Honor current filter when nothing is selected
+                q = search_var.get().strip().upper()
+                picked = [
+                    r for r in rows
+                    if not q or (q in r['symbol'].upper()
+                                 or q in r['platforms'].upper())
+                ]
+            return picked, key
+
+        def _copy_current():
+            picked, _ = _selected_or_all_rows()
+            if not picked:
                 return
-            lb = tabs[key]['listbox']
-            sel = [lb.get(i) for i in lb.curselection()]
-            payload = sel if sel else [lb.get(i) for i in range(lb.size())]
-            if not payload:
-                return
+            # Copy just the gene symbols (one per line) — most useful for
+            # pasting into enrichment tools.
+            payload = "\n".join(r['symbol'] for r in picked)
             try:
                 win.clipboard_clear()
-                win.clipboard_append('\n'.join(payload))
+                win.clipboard_append(payload)
                 status_lbl.config(
-                    text=f"Copied {len(payload):,} gene(s) to clipboard"
+                    text=f"Copied {len(picked):,} gene(s) to clipboard"
                 )
             except Exception as exc:
                 messagebox.showerror("Clipboard error", str(exc), parent=win)
 
         def _save_current():
-            key = _current_tab_key()
-            if key not in tabs:
-                return
-            genes = tabs[key]['all_genes']
-            if not genes:
+            picked, key = _selected_or_all_rows()
+            if not picked:
                 messagebox.showinfo("Empty", "No genes to save.", parent=win)
                 return
-            default_name = key.split(' (')[0].replace(' ', '_') + "_genes.csv"
+            default_name = (key or "gene_list").split(' (')[0].replace(' ', '_') + "_genes.csv"
             path = filedialog.asksaveasfilename(
                 parent=win,
                 title="Save Gene List",
@@ -11099,10 +13226,12 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 return
             try:
                 with open(path, 'w', encoding='utf-8') as f:
-                    f.write("gene_symbol\n")
-                    for g in genes:
-                        f.write(f"{g}\n")
-                status_lbl.config(text=f"Saved {len(genes):,} genes -> {path}")
+                    f.write("gene_symbol,coverage,platforms\n")
+                    for r in picked:
+                        # quote platform list (may contain commas)
+                        f.write(f"{r['symbol']},{r['coverage']},"
+                                f"\"{r['platforms']}\"\n")
+                status_lbl.config(text=f"Saved {len(picked):,} genes -> {path}")
             except Exception as exc:
                 messagebox.showerror("Save failed", str(exc), parent=win)
 
@@ -11176,7 +13305,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             self.enqueue_log(f"[{gpl_name}] Reading expression data (this may take a moment)...")
             _is_gz = str(full_file_path).endswith('.gz')
             data_df = pd.read_csv(full_file_path, compression="gzip" if _is_gz else "infer", low_memory=False)
-            self.progressbar["value"] = 30
+            self.update_progress(value=30, text=f"Parsing {gpl_name}…")
             self.update_idletasks()
             
             if gpl_name == "GPL570" and full_meta_path:
@@ -11193,9 +13322,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 else:
                     self.enqueue_log(f"[{gpl_name}] [!] Metadata file not found at {full_meta_path}")
             
-            self.progressbar["value"] = 50
+            self.update_progress(value=50, text=f"Identifying samples in {gpl_name}…")
             self.update_idletasks()
-            
+
             gsm_col = None
             if "gsm" in data_df.columns:
                 data_df.rename(columns={"gsm": "GSM"}, inplace=True)
@@ -11251,9 +13380,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             else:
                 self.enqueue_log(f"[{gpl_name}] [!] Could not identify GSM column - some features may be limited")
             
-            self.progressbar["value"] = 70
+            self.update_progress(value=70, text=f"Indexing genes for {gpl_name}…")
             self.update_idletasks()
-            
+
             self.gpl_datasets[gpl_name] = data_df
             
             gene_map = {}
@@ -11285,9 +13414,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             
             self.gpl_gene_mappings[gpl_name] = gene_map
             
-            self.progressbar["value"] = 100
+            self.update_progress(value=100, text=f"{gpl_name} loaded")
             self.update_idletasks()
-            
+
             mem_usage_mb = data_df.memory_usage(deep=True).sum() / 1024**2
             
             _load_type = "SUBSET for labeled samples" if gsm_filter else "ALL SAMPLES LOADED"
@@ -11335,29 +13464,53 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             self.status_label.config(text="Ready", foreground="gray")
 
     def start_extraction(self):
-        """Starts GSE extraction thread - COMPLETE VERSION."""
+        """Starts search thread across the selected data sources."""
         if self.current_extraction_thread and self.current_extraction_thread.is_alive():
-            messagebox.showwarning("Busy", "GSE extraction is already running.\n\nPlease wait for it to complete.", parent=self)
+            messagebox.showwarning("Busy", "Search is already running.\n\nPlease wait for it to complete.", parent=self)
             return
-        
+
+        # Which sources did the user enable?
+        use_geo = bool(self.src_geo_var.get())
+        extra_sources = set()
+        if getattr(self, "src_archs4_var", None) and self.src_archs4_var.get():
+            extra_sources.add("archs4")
+        if getattr(self, "src_cellxgene_var", None) and self.src_cellxgene_var.get():
+            extra_sources.add("cellxgene")
+        if getattr(self, "src_atlas_var", None) and self.src_atlas_var.get():
+            extra_sources.add("atlas")
+
+        if not use_geo and not extra_sources:
+            messagebox.showerror("No source selected",
+                "Please tick at least one data source in section 1.",
+                parent=self)
+            return
+
         gz_path = CONFIG['paths']['geo_db']
-        if not gz_path or not os.path.exists(gz_path):
+        if use_geo and (not gz_path or not os.path.exists(gz_path)):
             messagebox.showerror(
-                "Database Required", 
-                "GEOmetadb.sqlite.gz is required for GSE extraction.\n\n"
+                "GEOmetadb Required",
+                "GEOmetadb.sqlite.gz is required for GEOmetadb search.\n\n"
                 "Please download from:\n"
                 "https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz\n\n"
-                f"Expected at: {gz_path}", 
+                f"Expected at: {gz_path}\n\n"
+                "Or un-tick 'GEOmetadb' in section 1 to skip it.",
                 parent=self
             )
             return
-        
-        plat_filter = self.platform_entry.get().strip()
+
+        plat_filter = self.platform_entry.get().strip() if use_geo else ""
         tokens = self.filter_entry.get().strip()
-        
+
         if not tokens:
             messagebox.showerror("Input Required", "Please enter at least one keyword to search for.\n\nExample: cancer, breast, treatment", parent=self)
             return
+
+        # Collect per-source sub-filters
+        subfilters = {}
+        if "archs4" in extra_sources:
+            subfilters["archs4_organism"] = self.archs4_org_var.get() or "human"
+        if "atlas" in extra_sources:
+            subfilters["atlas_species"] = self.atlas_species_entry.get().strip()
         
         self.step1_results_df = None
         self.step2_data_df = None
@@ -11367,6 +13520,11 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self.gse_listbox.delete(0, tk.END)
         self.gse_frame.pack_forget()
         self.step2_status_label.config(text="Searching GEO database...", foreground="blue")
+        # Mark Step 1 as running (search kicking off)
+        try:
+            self._set_step_status(self.step1_frame, self._step1_title, "running")
+        except Exception:
+            pass
         
         self.enqueue_log("[Step 1] Starting GEO database search...")
         self.enqueue_log(f"[Step 1] Keywords: {tokens}")
@@ -11378,14 +13536,31 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self.update_progress(value=0)
         self.status_label.config(text="Searching GEO database...", foreground="blue")
         
+        if extra_sources:
+            self.enqueue_log(f"[Step 1] Extra sources: {sorted(extra_sources)}")
+
+        active_sources = set()
+        if use_geo:
+            active_sources.add("geo")
+        active_sources |= extra_sources
+
         self.current_extraction_thread = ExtractionThread(
             gz_path=CONFIG['paths']['geo_db'],
             plat_filter=plat_filter,
             search_tokens=tokens,
             log_func=self.enqueue_log,
             on_finish=self.on_extraction_finish,
-            gui_ref=self
+            gui_ref=self,
+            search_sources=active_sources,
+            subfilters=subfilters,
         )
+        # Kick off shimmer immediately so the bar feels active even before the
+        # worker's first progress message arrives. update_progress() handles
+        # subsequent transitions automatically.
+        try:
+            self.update_progress(value=1, text="Starting search…")
+        except Exception:
+            pass
         self.current_extraction_thread.start()
     
 
@@ -11405,8 +13580,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         gsm_descriptions = thread.gsm_descriptions
         
         self.current_extraction_thread = None
-        
-        self.progressbar["value"] = 100
+
+        # Route through update_progress so the shimmer stops cleanly
+        self.update_progress(value=100, text="Search complete")
         self.status_label.config(text="Search complete", foreground="green")
         
         if self.step1_results_df is None or self.step1_results_df.empty:
@@ -11809,20 +13985,22 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         info_frame.pack(fill=tk.X, padx=PAD, pady=(PAD, 4))
 
         info_text = (
-            "Phase 1 — Raw LLM Extraction (always runs)\n"
-            "  Each sample classified by gemma4:e2b → Condition, Tissue, Age, Treatment, Treatment_Time.\n"
-            "  VRAM-aware parallel workers. RAW output — no .title(), no synonym dictionaries.\n\n"
-            "Phase 1.5 — Per-GSE Label Collapsing (always runs)\n"
-            "  Within each experiment (GSE) only. Two strict rules:\n"
-            "    1. Exact match (case/space/hyphen)  2. Abbreviation initials (AD → Alzheimer Disease)\n"
-            "  Numeric guard: Mut12 ≠ Mut10. NO fuzzy matching, NO substring, NO synonyms.\n\n"
-            "Phase 2 — 'Not Specified' Recovery (optional, background)\n"
-            "  Fetches experiment descriptions from NCBI GEO website. Uses GSE context + sibling\n"
-            "  sample consensus to recover missing labels. Only: Condition, Tissue, Treatment.\n\n"
-            "Phase 3 — LLM Curator (optional, manual trigger)\n"
-            "  LLM reviews label inventory across experiments: 'Are AML and Acute Myeloid Leukemia\n"
-            "  the same concept?' Pre-filters candidates → LLM judges → user reviews → apply.\n"
-            "  Button: 'Curate Labels (LLM)' in the label management bar or Region Analysis."
+            "Phase 1 — Verbatim per-label LLM extraction\n"
+            "  Three column-parallel extractors (Tissue, Condition, Treatment) emit\n"
+            "  verbatim spans from each sample's metadata. Reasoning is ON.\n\n"
+            "Phase 1b — GSE-context inference for 'Not Specified'\n"
+            "  Re-runs the extractors on samples that came back 'Not Specified',\n"
+            "  using the sibling-label distribution within the same GSE and the\n"
+            "  scraped Series_title / Series_summary / overall_design as context.\n\n"
+            "Phase 1c — Deterministic consensus + BioLORD semantic curator\n"
+            "  Deterministic rules R1-R4 (per-GSE consensus, threshold 0.80) plus\n"
+            "  the optional BioLORD-2023 semantic anomaly detector. Token-fingerprint\n"
+            "  canonicalisation collapses morphologically-equivalent surfaces.\n\n"
+            "Phase 2 — Multi-agent MeSH cascade canonicalisation\n"
+            "  Coordinator + Collapsers + Verifier + OodMeshMinter + Router agents\n"
+            "  run a 5-tier cascade that maps each label to a MeSH descriptor\n"
+            "  (Tier 0 exact → 1 alias → 2 embedding → 3 router → 4 LLM picker →\n"
+            "  5 OOD-mesh mint). Router and reasoning are permanently ON."
         )
         info_lbl = tk.Label(info_frame, text=info_text, font=('Consolas', 8),
                             justify=tk.LEFT, anchor='nw', fg='#333', bg='#F5F5F5',
@@ -12144,6 +14322,10 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         gpu_lbl = ttk.Label(ollama_frame, text="", foreground="gray",
                             font=('Segoe UI', 8, 'italic'))
         gpu_lbl.pack(anchor=tk.W)
+        # Phase 2 agent fleet recommendation (auto-scaled to local resources)
+        agents_lbl = ttk.Label(ollama_frame, text="", foreground="#1565C0",
+                               font=('Segoe UI', 8, 'italic'))
+        agents_lbl.pack(anchor=tk.W)
         def _refresh_gpu():
             try:
                 import os as _os, psutil as _ps
@@ -12171,6 +14353,19 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     hw_lines.append("GPU: None detected (CPU-only mode)")
                     txt = f"Ollama: {gpu_st} | Recommended: {auto_total} CPU workers"
 
+                # Phase 2 multi-agent fleet sized off the same resource budget.
+                # Collapsers scale with total workers; Verifier / Minter / Router
+                # are singletons by design. GSE-level concurrency is throttled
+                # when VRAM is tight (<8 GB free) to keep Phase 2 deadlock-free.
+                n_collapsers = max(1, auto_total)
+                vram_free = max((g['free_vram_gb'] for g in gpus), default=0.0)
+                gse_workers = max(1, min(auto_total, 4 if vram_free >= 8 else 1))
+                fleet_total = n_collapsers + 3  # +verifier +minter +router
+                agents_lbl.config(
+                    text=(f"Phase 2 fleet: {n_collapsers} collapser(s) + "
+                          f"1 verifier + 1 router + 1 minter = {fleet_total} agents "
+                          f"| GSE-workers: {gse_workers}"))
+
                 hw_info_lbl.config(text="\n".join(hw_lines))
                 gpu_lbl.config(text=txt)
 
@@ -12178,6 +14373,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 if worker_var.get() == 0 and cpu_worker_var.get() == 0:
                     worker_var.set(auto_gpu)
                     cpu_worker_var.set(auto_cpu)
+                # Remember for downstream CLI delegation / Region Analysis.
+                self._llm_phase2_collapsers = n_collapsers
+                self._llm_phase2_gse_workers = gse_workers
             except Exception as e:
                 gpu_lbl.config(text=f"Detection error: {e}")
         win.after(500, _refresh_gpu)
@@ -13449,9 +15647,13 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             )
             
             self.step2_status_label.config(
-                text=f"OK {len(df_to_label):,} samples labeled manually - Ready for analysis", 
+                text=f"OK {len(df_to_label):,} samples labeled manually - Ready for analysis",
                 foreground="green"
             )
+            try:
+                self._set_step_status(self._step2_frame, self._step2_title, "done")
+            except Exception:
+                pass
             
             if messagebox.askyesno("Continue?", "Add another label category?", parent=label_win):
                 label_entry.delete(0, tk.END)
@@ -16957,6 +19159,51 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=5)
 
     # ═══════════════════════════════════════════════════════════════
+    #  Label Enrichment — Fisher/hypergeometric tests across labels
+    # ═══════════════════════════════════════════════════════════════
+    def _open_label_enrichment(self):
+        """Open the Label Enrichment analysis window.
+
+        Tests whether LLM-extracted sample labels (tissue, condition, treatment,
+        age-bin, …) are over- or under-represented in a chosen foreground
+        (a gene's high-expression region, a subset of samples, or a platform).
+        """
+        try:
+            LabelEnrichmentWindow(self)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "Label Enrichment",
+                f"Could not open Label Enrichment window:\n{exc}",
+                parent=self,
+            )
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Single-cell (CELLxGENE) browser — real scRNA-seq ingest
+    # ═══════════════════════════════════════════════════════════════
+    def _open_cellxgene_browser(self):
+        """Open the CELLxGENE Census browser to fetch single-cell data.
+
+        Fetched data can be (a) pseudo-bulked and registered as a new
+        platform in ``self.gpl_datasets`` so every existing analysis
+        window sees it, or (b) explored cell-level via composition /
+        UMAP / dot-plot / QC. All values are real measurements — see
+        ``utils.pseudobulk`` for the aggregation semantics.
+        """
+        try:
+            from genevariate.gui.windows.cellxgene_browser import CellxGeneBrowserWindow
+            CellxGeneBrowserWindow(self)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "Single-cell (CELLxGENE)",
+                f"Could not open CELLxGENE browser:\n{exc}",
+                parent=self,
+            )
+
+    # ═══════════════════════════════════════════════════════════════
     #  Distribution Classification — per-gene statistics
     # ═══════════════════════════════════════════════════════════════
     def _open_dist_classification(self):
@@ -17628,7 +19875,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             self._gpl_dl_window.lift()
             return
         win = tk.Toplevel(self)
-        win.title("GeneVariate - GPL Auto-Downloader (Any Species)")
+        win.title("GeneVariate — Platform Downloader (any species, any technology)")
         win.geometry("1050x800")
         try:
             _sw, _sh = win.winfo_screenwidth(), win.winfo_screenheight()
@@ -17638,13 +19885,14 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._gpl_dl_window = win
 
         ttk.Label(win,
-                  text="Download and preprocess any GPL platform from NCBI GEO. "
+                  text="Download and preprocess any platform from NCBI GEO — "
+                       "microarray, bulk RNA-seq, single-cell, methylation, or other. "
                        "Search by species or enter a GPL ID directly.",
                   foreground="gray", font=('Segoe UI', 9, 'italic'),
                   wraplength=900).pack(padx=15, pady=(10, 5))
 
-        # ── Direct GPL download row ─────────────────────────────────
-        direct_frame = ttk.LabelFrame(win, text="Direct GPL Download", padding=8)
+        # ── Direct platform download row ────────────────────────────
+        direct_frame = ttk.LabelFrame(win, text="Direct Platform Download (by GPL ID)", padding=8)
         direct_frame.pack(fill=tk.X, padx=15, pady=5)
 
         inp = ttk.Frame(direct_frame)
@@ -17678,6 +19926,10 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                   command=self._search_species_gpls,
                   bg="#1565C0", fg="white", font=("Segoe UI", 10, "bold"),
                   padx=12, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(search_row, text="Select Species...",
+                  command=self._open_all_species_picker,
+                  bg="#6A1B9A", fg="white", font=("Segoe UI", 10, "bold"),
+                  padx=12, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=4)
         self._species_entry.bind('<Return>', lambda e: self._search_species_gpls())
 
         # Quick species buttons
@@ -17704,19 +19956,62 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         from genevariate.core.gpl_downloader import (
             TECH_CATEGORIES, CATEGORY_LABELS, CATEGORY_COLORS,
         )
+        # Saturated icon colours (CATEGORY_COLORS are pastels meant for tree
+        # backgrounds — darken them so the badge initials read well in white).
+        _TECH_ICON_COLORS = {
+            "microarray":       "#1976D2",  # blue chip
+            "bulk-rna-seq":     "#2E7D32",  # green
+            "single-cell":      "#E65100",  # deep orange
+            "methylation":      "#6A1B9A",  # purple
+            "sequencing-other": "#F9A825",  # amber
+            "other":            "#616161",  # grey
+        }
+        _TECH_INITIALS = {
+            "microarray":       "µa",
+            "bulk-rna-seq":     "Rb",
+            "single-cell":      "sc",
+            "methylation":      "Me",
+            "sequencing-other": "Sq",
+            "other":            "?",
+        }
+        _TECH_TOOLTIPS = {
+            "microarray":       "Microarray platforms (Affymetrix, Agilent, Illumina BeadChip, …)",
+            "bulk-rna-seq":     "Bulk RNA-seq platforms (HiSeq, NovaSeq, NextSeq, …)",
+            "single-cell":      "Single-cell / single-nucleus RNA-seq (10x, Smart-seq, Drop-seq, …)",
+            "methylation":      "DNA methylation arrays (Illumina 450K / EPIC, bisulfite-seq, …)",
+            "sequencing-other": "Other sequencing (ChIP-seq, ATAC-seq, proteomics, …)",
+            "other":            "Uncategorised / other platforms",
+        }
+        # Keep PhotoImage references alive for the lifetime of the window
+        self._tech_icons = {
+            c: self._make_source_badge(_TECH_ICON_COLORS[c],
+                                        _TECH_INITIALS[c], size=18)
+            for c in TECH_CATEGORIES
+        }
+        # Generic "globe" icon for the All radio button
+        self._tech_icons["all"] = self._make_source_badge("#455A64", "•", size=18)
+
         filter_row = ttk.Frame(species_frame)
         filter_row.pack(fill=tk.X, pady=(4, 2))
         ttk.Label(filter_row, text="Filter by technology:",
                   font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
         self._tech_filter_var = tk.StringVar(value="all")
-        filter_options = [("All", "all")] + [
-            (CATEGORY_LABELS[c], c) for c in TECH_CATEGORIES
+        filter_options = [("All", "all", "Show every category — no filter")] + [
+            (CATEGORY_LABELS[c], c, _TECH_TOOLTIPS[c]) for c in TECH_CATEGORIES
         ]
-        for lbl, val in filter_options:
-            ttk.Radiobutton(filter_row, text=lbl, value=val,
-                            variable=self._tech_filter_var,
-                            command=self._apply_gpl_tech_filter
-                            ).pack(side=tk.LEFT, padx=3)
+        for lbl, val, tip in filter_options:
+            item = ttk.Frame(filter_row)
+            item.pack(side=tk.LEFT, padx=3)
+            icon = self._tech_icons.get(val)
+            if icon is not None:
+                ic_lbl = ttk.Label(item, image=icon)
+                ic_lbl.pack(side=tk.LEFT, padx=(0, 2))
+                self._set_tooltip(ic_lbl, tip)
+            rb = ttk.Radiobutton(item, text=lbl, value=val,
+                                  variable=self._tech_filter_var,
+                                  command=self._apply_gpl_tech_filter)
+            rb.pack(side=tk.LEFT)
+            self._set_tooltip(rb, tip)
 
         # Results treeview
         self._species_status = ttk.Label(species_frame,
@@ -17830,6 +20125,245 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._species_entry.insert(0, species)
         self._search_species_gpls()
 
+    def _load_all_species_from_geometadb(self):
+        """Return a list of (species_name, platform_count) tuples for every
+        organism known to GEOmetadb, sorted by descending platform count.
+        Cached after first call.
+        """
+        cached = getattr(self, '_all_species_cache', None)
+        if cached is not None:
+            return cached
+        if not self.gds_conn:
+            return []
+        try:
+            cur = self.gds_conn.cursor()
+            # Each platform may list several organisms separated by ';' or ','
+            # We take the raw organism field as-is and split client-side so the
+            # user sees exactly what GEO records.
+            cur.execute(
+                "SELECT organism FROM gpl WHERE organism IS NOT NULL "
+                "AND TRIM(organism) <> ''"
+            )
+            from collections import Counter
+            import re
+            counts = Counter()
+            for (org,) in cur.fetchall():
+                # Split on ';' or newline, fall back to whole string. Do NOT
+                # split on ',' because some species names contain commas.
+                parts = [p.strip() for p in re.split(r'[;\n]+', org) if p.strip()]
+                if not parts:
+                    parts = [org.strip()]
+                for p in parts:
+                    counts[p] += 1
+            items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+            self._all_species_cache = items
+            return items
+        except Exception as exc:
+            try:
+                self.enqueue_log(f"[Species Picker] Failed to query species: {exc}")
+            except Exception:
+                pass
+            return []
+
+    def _open_all_species_picker(self):
+        """Show a filterable list of every species in GEOmetadb. Selecting one
+        fills the species entry and triggers a search."""
+        if not self.gds_conn:
+            messagebox.showwarning(
+                "GEOmetadb Not Loaded",
+                "The GEOmetadb database is not loaded yet. "
+                "Wait for startup to finish, then try again.",
+                parent=self,
+            )
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Select Species — All GEO organisms")
+        win.geometry("620x620")
+        try:
+            _sw, _sh = win.winfo_screenwidth(), win.winfo_screenheight()
+            win.geometry(f"620x620+{(_sw-620)//2}+{(_sh-620)//2}")
+        except Exception:
+            pass
+        try:
+            win.transient(self)
+            win.lift()
+            win.focus_force()
+            win.attributes('-topmost', True)
+            win.after(400, lambda w=win: (w.attributes('-topmost', False)
+                                          if w.winfo_exists() else None))
+        except Exception:
+            pass
+
+        header = ttk.Frame(win, padding=10)
+        header.pack(fill=tk.X)
+        ttk.Label(header,
+                  text="All species in GEOmetadb",
+                  font=('Segoe UI', 13, 'bold')).pack(anchor=tk.W)
+        subtitle = ttk.Label(header,
+                             text="Loading species list from GEOmetadb...",
+                             foreground='gray', font=('Segoe UI', 9, 'italic'))
+        subtitle.pack(anchor=tk.W, pady=(2, 0))
+
+        filt_row = ttk.Frame(win, padding=(10, 0))
+        filt_row.pack(fill=tk.X)
+        ttk.Label(filt_row, text="Filter:",
+                  font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        filter_var = tk.StringVar(master=win)
+        filter_entry = ttk.Entry(filt_row, textvariable=filter_var,
+                                 font=('Segoe UI', 11))
+        filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        count_lbl = ttk.Label(filt_row, text="", foreground='#555',
+                              font=('Segoe UI', 9))
+        count_lbl.pack(side=tk.LEFT, padx=10)
+
+        list_frame = ttk.Frame(win, padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ("rank", "organism", "count")
+        tree = ttk.Treeview(list_frame, columns=cols, show="headings",
+                            selectmode="browse", height=22)
+        tree.heading("rank", text="#")
+        tree.heading("organism", text="Organism (scientific name)")
+        tree.heading("count", text="# Platforms")
+        tree.column("rank", width=60, anchor=tk.CENTER, stretch=False)
+        tree.column("organism", width=380, anchor=tk.W, stretch=True)
+        tree.column("count", width=110, anchor=tk.CENTER, stretch=False)
+
+        vsb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        hsb = ttk.Scrollbar(list_frame, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Row styling: alternating stripes + tier color per platform count
+        # Combined so each row is visually separated AND coloured by importance.
+        tree.tag_configure("row_even", background='#FFFFFF')
+        tree.tag_configure("row_odd",  background='#F0F4F8')
+        tree.tag_configure("tier_top",    foreground='#1B5E20')  # 100+
+        tree.tag_configure("tier_high",   foreground='#2E7D32')  # 30+
+        tree.tag_configure("tier_mid",    foreground='#EF6C00')  # 5+
+        tree.tag_configure("tier_low",    foreground='#B71C1C')  # <5
+
+        # Bigger row height so separators stand out like the GPL list
+        _style = ttk.Style()
+        try:
+            _style.configure("SpeciesPicker.Treeview",
+                             rowheight=26,
+                             borderwidth=1,
+                             relief="solid")
+            _style.configure("SpeciesPicker.Treeview.Heading",
+                             font=('Segoe UI', 10, 'bold'))
+            tree.configure(style="SpeciesPicker.Treeview")
+        except Exception:
+            pass
+
+        def _tier_tag(n):
+            if n >= 100:
+                return "tier_top"
+            if n >= 30:
+                return "tier_high"
+            if n >= 5:
+                return "tier_mid"
+            return "tier_low"
+
+        state = {'all': [], 'shown': []}
+
+        def _render(items):
+            tree.delete(*tree.get_children())
+            for rank, (name, n) in enumerate(items, start=1):
+                stripe = "row_odd" if rank % 2 else "row_even"
+                tree.insert("", tk.END, iid=str(rank - 1),
+                            values=(rank, name, f"{n:,}"),
+                            tags=(_tier_tag(n), stripe))
+            state['shown'] = list(items)
+            count_lbl.config(text=f"{len(items):,} / {len(state['all']):,}")
+
+        def _apply_filter(*_):
+            q = filter_var.get().strip().lower()
+            if not q:
+                _render(state['all'])
+                return
+            filtered = [(n, c) for (n, c) in state['all']
+                        if q in n.lower()]
+            _render(filtered)
+
+        filter_var.trace_add('write', _apply_filter)
+
+        def _use_selected():
+            sel = tree.selection()
+            if not sel:
+                return
+            try:
+                idx = int(sel[0])
+            except ValueError:
+                return
+            if idx < 0 or idx >= len(state['shown']):
+                return
+            name, _ = state['shown'][idx]
+            self._species_entry.delete(0, tk.END)
+            self._species_entry.insert(0, name)
+            win.destroy()
+            self._search_species_gpls()
+
+        tree.bind('<Double-1>', lambda e: _use_selected())
+        tree.bind('<Return>',   lambda e: _use_selected())
+
+        btns = ttk.Frame(win, padding=10)
+        btns.pack(fill=tk.X)
+        tk.Button(btns, text="Use Selected",
+                  command=_use_selected,
+                  bg="#2E7D32", fg="white", font=("Segoe UI", 10, "bold"),
+                  padx=14, pady=4, cursor="hand2").pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Cancel", command=win.destroy,
+                  bg="#757575", fg="white", font=("Segoe UI", 10),
+                  padx=14, pady=4, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+
+        # Load list in background so the dialog pops up instantly
+        import threading
+
+        def _load():
+            try:
+                anim = self._animator
+                anim.spinner(subtitle,
+                             "Querying GEOmetadb for all organisms...",
+                             color='#6A1B9A')
+            except Exception:
+                pass
+
+            def _do_query():
+                items = self._load_all_species_from_geometadb()
+
+                def _finish():
+                    try:
+                        self._animator.stop(subtitle)
+                    except Exception:
+                        pass
+                    state['all'] = items
+                    if not items:
+                        subtitle.config(
+                            text="No species found (GEOmetadb may be empty).",
+                            foreground='#C62828')
+                    else:
+                        subtitle.config(
+                            text=f"{len(items):,} distinct organisms — "
+                                 f"type to filter, double-click to use.",
+                            foreground='#1B5E20')
+                    _render(items)
+                    try:
+                        filter_entry.focus()
+                    except Exception:
+                        pass
+
+                try:
+                    win.after(0, _finish)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_do_query, daemon=True).start()
+
+        _load()
+
     def _search_species_gpls(self):
         """Query GEOmetadb for platforms matching species OR GPL ID. Runs in background thread."""
         species = self._species_entry.get().strip()
@@ -17843,13 +20377,25 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             return
 
         self.enqueue_log(f"[GPL Browser] Searching for '{species}'...")
-        self._species_status.config(text=f"Searching for '{species}'...", foreground="blue")
         self.update_progress(value=10, text=f"Searching GPLs: {species}")
         # Also update the GPL downloader's own progress bar
         try:
             self.auto_dl_progress_bar["maximum"] = 100
             self.auto_dl_progress_bar["value"] = 10
-            self.auto_dl_status.config(text=f"Searching for '{species}'...", foreground="blue")
+        except Exception:
+            pass
+
+        # ── Liquid animations: spinner + pulsing bar while searching ──
+        try:
+            anim = self._animator
+            anim.spinner(self._species_status,
+                         f"Searching for '{species}'...",
+                         color="#1565C0")
+            anim.spinner(self.auto_dl_status,
+                         f"Searching for '{species}'...",
+                         color="#1565C0")
+            anim.pulse_bar(self.auto_dl_progress_bar, palette=_UIAnimator.PULSE_BLUES)
+            anim.pulse_bar(self.progressbar, palette=_UIAnimator.PULSE_BLUES)
         except Exception:
             pass
 
@@ -17900,10 +20446,16 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
 
                 def _update_status(text, pct=None):
                     try:
-                        self.after(0, lambda: self._species_status.config(text=text, foreground="blue"))
+                        # Update the spinner's base text on both status labels so
+                        # the glyph keeps cycling while the message changes.
+                        self.after(0, lambda: self._animator.update_spinner_text(
+                            self._species_status, text))
+                        self.after(0, lambda: self._animator.update_spinner_text(
+                            self.auto_dl_status, text))
                         if pct is not None:
-                            self.after(0, lambda p=pct: self.auto_dl_progress_bar.config(value=p))
-                            self.after(0, lambda t=text: self.auto_dl_status.config(text=t, foreground="blue"))
+                            self.after(0, lambda p=pct:
+                                self._animator.smooth_to(
+                                    self.auto_dl_progress_bar, p))
                     except: pass
 
                 _update_status(f"Found {len(rows)} platforms, counting samples...", 20)
@@ -17959,13 +20511,24 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                         actual_org = rows[0][3] if rows and rows[0][3] else species
                         done_text = (f"Found {len(rows)} platform(s) for {search_desc} "
                                      f"({actual_org}). Double-click to download.")
+                        # Stop spinner/pulse and set final text with a success flash
+                        self._animator.stop(self._species_status)
+                        self._animator.stop(self.auto_dl_status)
+                        self._animator.stop_pulse(self.auto_dl_progress_bar)
+                        self._animator.stop_pulse(self.progressbar)
                         self._species_status.config(text=done_text, foreground="green")
                         self.auto_dl_status.config(text=done_text, foreground="green")
-                        self.auto_dl_progress_bar["value"] = 100
+                        self._animator.flash(self._species_status, "#2E7D32",
+                                             revert_to="green", duration_ms=1200)
+                        self._animator.smooth_to(self.auto_dl_progress_bar, 100)
                         self.enqueue_log(f"[GPL Browser] Found {len(rows)} platforms for {search_desc}")
                         self.update_progress(value=0)
                         self.after(2000, lambda: self.auto_dl_progress_bar.config(value=0))
                     except Exception as e:
+                        self._animator.stop(self._species_status)
+                        self._animator.stop(self.auto_dl_status)
+                        self._animator.stop_pulse(self.auto_dl_progress_bar)
+                        self._animator.stop_pulse(self.progressbar)
                         self._species_status.config(text=f"Error: {e}", foreground="red")
                         self.auto_dl_progress_bar["value"] = 0
                         self.update_progress(value=0)
@@ -17974,6 +20537,10 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     def _no_results():
                         no_text = (f"No platforms found for {search_desc}. "
                                    f"Try 'Homo sapiens' or 'GPL570'.")
+                        self._animator.stop(self._species_status)
+                        self._animator.stop(self.auto_dl_status)
+                        self._animator.stop_pulse(self.auto_dl_progress_bar)
+                        self._animator.stop_pulse(self.progressbar)
                         self._species_status.config(text=no_text, foreground="orange")
                         self.auto_dl_status.config(text=no_text, foreground="orange")
                         self.auto_dl_progress_bar["value"] = 0
@@ -17985,6 +20552,13 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             except Exception as e:
                 self.enqueue_log(f"[GPL Browser] Search error: {e}")
                 def _err():
+                    try:
+                        self._animator.stop(self._species_status)
+                        self._animator.stop(self.auto_dl_status)
+                        self._animator.stop_pulse(self.auto_dl_progress_bar)
+                        self._animator.stop_pulse(self.progressbar)
+                    except Exception:
+                        pass
                     self._species_status.config(text=f"Search error: {e}", foreground="red")
                     try:
                         self.auto_dl_status.config(text=f"Search error: {e}", foreground="red")

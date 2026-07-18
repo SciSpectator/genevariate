@@ -21,6 +21,35 @@ from scipy.stats import gaussian_kde, ranksums, wasserstein_distance, fisher_exa
 
 plt.rcParams['figure.max_open_warning'] = 50
 
+# Unified GeneVariate plot stylesheet (graceful fallback if utils missing)
+try:
+    from genevariate.utils.viz_style import (
+        apply_genevariate_style as _apply_gv_style,
+        palette_for as _palette_for,
+        cmap_for as _cmap_for,
+        style_axis as _style_axis,
+        smart_figsize as _smart_figsize,
+        cap_figsize as _cap_figsize,
+        enable_hover as _enable_hover,
+    )
+    _apply_gv_style()
+except Exception:
+    def _palette_for(n, use_case="discrete"):
+        if n <= 10: p = sns.color_palette("tab10", n)
+        elif n <= 20: p = sns.color_palette("tab20", n)
+        else: p = sns.color_palette("husl", n)
+        return [mcolors.to_hex(c) for c in p]
+    def _cmap_for(kind="sequential"):
+        return "viridis" if kind != "diverging" else "RdBu_r"
+    def _style_axis(ax, xlabel=None, ylabel=None, title=None):
+        if xlabel is not None: ax.set_xlabel(xlabel)
+        if ylabel is not None: ax.set_ylabel(ylabel)
+        if title is not None: ax.set_title(title)
+    def _smart_figsize(kind="default"): return (10, 6)
+    def _cap_figsize(w, h, max_w=16.0, max_h=10.0):
+        return (min(w, max_w), min(h, max_h))
+    def _enable_hover(artists, fig, formatter=None): return None
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Constants
@@ -63,10 +92,8 @@ def _kde(vals, n=300, x_range=None):
     except: return None
 
 def _clrs(n):
-    if n <= 10: p = sns.color_palette("tab10", n)
-    elif n <= 20: p = sns.color_palette("tab20", n)
-    else: p = sns.color_palette("gist_ncar", n)
-    return [mcolors.to_hex(c) for c in p]
+    # Delegate to unified stylesheet for a colorblind-safe, consistent palette.
+    return _palette_for(n, use_case="discrete")
 
 def _tr(s, m=28):
     s = str(s)
@@ -1341,7 +1368,7 @@ class RegionAnalysisWindow(tk.Toplevel):
             ax.set_title(f"{region['label']} - {slbl}{cb}{overlay_t}", fontsize=12, weight='bold')
             ax.set_xlabel("Expression"); ax.set_ylabel("Normalized Density"); ax.set_ylim(bottom=0)
             if handles:
-                leg = ax.legend(handles=handles, fontsize=7, loc='upper left',
+                leg = ax.legend(handles=handles, fontsize=9, loc='upper left',
                                 bbox_to_anchor=(1.01, 1.0), framealpha=0.92, fancybox=True)
                 _interactive_legend(fig, leg, amap)
             plt.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.10)
@@ -1371,7 +1398,7 @@ class RegionAnalysisWindow(tk.Toplevel):
              '#006064', '#0097A7', '#4DD0E1', '#B2EBF2'],
         ]
 
-        fig, ax = plt.subplots(figsize=(18, 8))
+        fig, ax = plt.subplots(figsize=_cap_figsize(18, 8))
         amap = {}; handles = []
 
         # Draw background (always for Whole Platform, optional for Selected)
@@ -1454,7 +1481,7 @@ class RegionAnalysisWindow(tk.Toplevel):
         ax.set_title(f"MERGED: {n_regions} regions - {scope_lbl}{overlay_t}{cb}", fontsize=13, weight='bold')
         ax.set_xlabel("Expression"); ax.set_ylabel("Normalized Density"); ax.set_ylim(bottom=0)
         if handles:
-            leg = ax.legend(handles=handles, fontsize=7, loc='upper left',
+            leg = ax.legend(handles=handles, fontsize=9, loc='upper left',
                             bbox_to_anchor=(1.01, 1.0), framealpha=0.92, fancybox=True)
             _interactive_legend(fig, leg, amap)
         plt.subplots_adjust(left=0.06, right=0.68, top=0.92, bottom=0.10)
@@ -1739,7 +1766,7 @@ class RegionAnalysisWindow(tk.Toplevel):
                 ax_d.set_ylabel("Normalized Density", fontsize=10)
                 ax_d.set_ylim(bottom=0)
                 if handles:
-                    leg = ax_d.legend(handles=handles, fontsize=7, loc='upper left',
+                    leg = ax_d.legend(handles=handles, fontsize=9, loc='upper left',
                                       bbox_to_anchor=(1.01, 1.0), ncol=max(1, len(handles) // 12),
                                       framealpha=0.92)
                     _interactive_legend(fig_d, leg, amap)
@@ -2135,7 +2162,7 @@ class RegionAnalysisWindow(tk.Toplevel):
             ax1.set_yticklabels(labels, fontsize=7.5)
             ax1.set_xlabel("Frequency (%)", fontsize=9)
             ax1.set_title(f"Selected vs Rest - {nice_col}", fontsize=10, weight='bold')
-            ax1.legend(fontsize=7, loc='lower right', framealpha=0.9)
+            ax1.legend(fontsize=9, loc='lower right', framealpha=0.9)
             ax1.invert_yaxis()
             ax1.grid(axis='x', alpha=0.2)
 
@@ -2226,7 +2253,7 @@ class RegionAnalysisWindow(tk.Toplevel):
                 _Patch2(facecolor='#E65100', label='p<0.01 **'),
                 _Patch2(facecolor='#F9A825', label='p<0.05 *'),
                 _Patch2(facecolor='#BDBDBD', label='ns'),
-            ], fontsize=7, loc='upper left', framealpha=0.9)
+            ], fontsize=9, loc='upper left', framealpha=0.9)
             ax.grid(alpha=0.15)
             try:
                 plt.tight_layout()

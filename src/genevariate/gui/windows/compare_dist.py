@@ -13,6 +13,25 @@ from scipy.stats import ranksums, wasserstein_distance
 from datetime import datetime
 from pathlib import Path
 
+# Unified GeneVariate plot stylesheet
+try:
+    from genevariate.utils.viz_style import (
+        apply_genevariate_style as _apply_gv_style,
+        palette_for as _palette_for,
+        smart_figsize as _smart_figsize,
+        cap_figsize as _cap_figsize,
+        EXPORT_DPI as _EXPORT_DPI,
+    )
+    _apply_gv_style()
+except Exception:
+    _EXPORT_DPI = 300
+    def _palette_for(n, use_case="discrete"):
+        import seaborn as _sns, matplotlib.colors as _mc
+        return [_mc.to_hex(c) for c in _sns.color_palette("tab10", n)]
+    def _smart_figsize(kind="default"): return (10, 6)
+    def _cap_figsize(w, h, max_w=16.0, max_h=10.0):
+        return (min(w, max_w), min(h, max_h))
+
 
 class CompareDistributionsWindow(tk.Toplevel):
     """

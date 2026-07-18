@@ -176,7 +176,7 @@ def show_resource_tier():
 
 
 def main():
-    """Main entry point. Use --ns-repair to launch the NS Repair tool."""
+    """Main entry point. Use --llm-extract to launch the LLM-GEO label extractor."""
     print("\n" + "=" * 60)
     print(" GeneVariate 2.0")
     print(" Gene Expression Variability Analysis Platform")
@@ -185,15 +185,19 @@ def main():
     show_resource_tier()
     print("=" * 60)
 
-    # Check for NS repair mode
-    if "--ns-repair" in sys.argv:
-        print("Launching NS Repair Tool...")
+    # Check for LLM-GEO label extractor mode (replaces the old --ns-repair).
+    if "--llm-extract" in sys.argv:
+        print("Launching LLM-GEO Label Extractor...")
         print("=" * 60 + "\n")
+        idx = sys.argv.index("--llm-extract")
+        forwarded = sys.argv[idx + 1:]
         try:
-            from genevariate.gui.ns_repair_app import main as ns_repair_main
-            ns_repair_main()
+            from genevariate.core.llm_extractor.cli import main as llm_extract_main
+            llm_extract_main(forwarded)
+        except SystemExit:
+            raise
         except Exception as e:
-            print(f"Error launching NS Repair: {e}")
+            print(f"Error launching LLM-GEO Label Extractor: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)

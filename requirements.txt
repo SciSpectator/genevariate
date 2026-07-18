@@ -17,6 +17,14 @@ psutil
 # AI / LLM
 ollama
 
+# LLM-GEO-Label-Extractor pipeline (optional — install if you plan to run
+# `genevariate-llm-extract` or `genevariate --llm-extract`).
+# Phase 1c semantic curator (BioLORD-2023) + DSPy-compiled prompts:
+# dspy-ai>=2.5
+# sentence-transformers>=2.7
+# torch>=1.11
+# transformers>=4.21
+
 # Quantile normalization (optional but recommended)
 qnorm
 
