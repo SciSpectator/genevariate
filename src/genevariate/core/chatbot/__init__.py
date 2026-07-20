@@ -12,6 +12,9 @@ from .langchain_agent import (
     run_agent,
     agent_available,
     unavailable_reason,
+    ensure_agent_ready,
+    api_key_prompt,
+    persist_api_key,
     AgentReply,
     DEFAULT_AGENT_MODEL,
 )
@@ -31,6 +34,9 @@ __all__ = [
     "run_agent",
     "agent_available",
     "unavailable_reason",
+    "ensure_agent_ready",
+    "api_key_prompt",
+    "persist_api_key",
     "AgentReply",
     "DEFAULT_AGENT_MODEL",
 ]

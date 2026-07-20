@@ -133,15 +133,26 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
     button cancels between steps.
   - **Confirm** — the classic single-tool safety path: one request routes to ONE tool and an
     editable card shows the resolved parameters; **nothing runs until you click *Run***.
-- The agent drives a local **Ollama** model via native tool-calling (default `llama3.1:8b`,
-  override with `GENEVARIATE_AGENT_MODEL`; `ollama pull llama3.1:8b`). When LangChain/Ollama
-  are absent it falls back to a deterministic heuristic planner, then to keyword routing —
-  the app works either way, no cloud calls.
+- **Pluggable LLM backend** (`GENEVARIATE_AGENT_BACKEND`): because the agent drives
+  GeneVariate's *Python API* (not the screen), a reliable tool-caller matters more than size —
+  no vision model needed.
+  - `groq` (**default**) — Groq's free hosted **Llama-3.3-70B**, the fastest/strongest
+    tool-caller. Paste a free key once in-app (console.groq.com/keys); it's saved thereafter.
+  - `ollama` — a fully **local** model (default `qwen2.5:7b`; `qwen2.5:14b`+ for deeper
+    reasoning), private + offline, **auto-installed and auto-pulled** on first use.
+  - anything else — an OpenAI-compatible endpoint (OpenRouter / Gemini / Cerebras / NVIDIA NIM)
+    via `GENEVARIATE_AGENT_BASE_URL` + `GENEVARIATE_AGENT_API_KEY`.
+- **Zero manual setup:** the first time you use Agent mode the app auto-installs the LLM stack
+  (and, for local, installs/starts Ollama and pulls the model), streaming progress in the
+  sidebar (Stop cancels). Override the model with `GENEVARIATE_AGENT_MODEL`. If a hosted key is
+  declined it drops to the local model; if that's unavailable it falls back to a deterministic
+  heuristic planner, then keyword routing — the app works either way.
 - Tools: `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
   `compare_gene`, `condition_enrichment`, `variability_enrichment`, `rank_genes`,
   `run_ngs_de`. Each calls the existing analysis API rather than reimplementing it.
 - Tk-free core in `core/chatbot/` (`build_registry`, `route`, `run_agent`, `agent_available`).
-- Optional extra: `pip install genevariate[agent]` (pulls `langchain` + `langchain-ollama`).
+- Optional extra (pre-provision; otherwise auto-installed on first use):
+  `pip install genevariate[agent]` (`langchain` + `langchain-groq` + `langchain-ollama`).
 
 ### Infrastructure
 

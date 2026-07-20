@@ -65,11 +65,13 @@ rnaseq = [
     "pydeseq2>=0.4",
     "anndata>=0.9",
 ]
-# LangChain reasoning agent driving local ollama tool-calling.
-# Model is configurable via GENEVARIATE_AGENT_MODEL (default llama3.1:8b);
-# pull it once with `ollama pull llama3.1:8b`.
+# LangChain reasoning agent with a pluggable backend (GENEVARIATE_AGENT_BACKEND:
+# groq [default] | ollama | openai-compatible). The app auto-installs the base
+# stack + the chosen backend client on first use, so this extra is only for
+# pre-provisioning. Model via GENEVARIATE_AGENT_MODEL; local models auto-pulled.
 agent = [
     "langchain>=1.0",
+    "langchain-groq>=0.2",
     "langchain-ollama>=0.3",
 ]
 dev = [

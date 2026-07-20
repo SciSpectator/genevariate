@@ -150,18 +150,14 @@ class ChatSidebar(ttk.Frame):
     def _refresh_mode_chip(self) -> None:
         chip = "keyword mode"
         try:
-            from genevariate.core.chatbot import (
-                agent_available, DEFAULT_AGENT_MODEL,
-            )
-            import os as _os
+            from genevariate.core.chatbot import agent_available
+            from genevariate.core.chatbot import langchain_agent as la
+            backend = la._backend()
+            model = la._default_model(backend)
             if agent_available():
-                model = _os.environ.get("GENEVARIATE_AGENT_MODEL",
-                                        DEFAULT_AGENT_MODEL)
-                chip = f"reasoning: {model}"
+                chip = f"{backend}: {model}"
             else:
-                from genevariate.core import ollama_manager as om
-                if om.ollama_server_ok():
-                    chip = "LLM routing"
+                chip = f"{backend}: setup on first use"
         except Exception:
             pass
         self._mode_lbl.configure(text=chip)
@@ -351,6 +347,49 @@ class ChatSidebar(ttk.Frame):
 
     # -------------------------------------------------- agent mode
     def _run_agent_goal(self, goal: str) -> None:
+        # A hosted backend (e.g. Groq) needs a free API key once — ask for it
+        # in-app, then proceed. Local backends skip this entirely.
+        need = None
+        try:
+            from genevariate.core.chatbot import (
+                agent_available, api_key_prompt,
+            )
+            if not agent_available():
+                need = api_key_prompt()
+        except Exception:
+            need = None
+        if need:
+            self._prompt_api_key(need, goal)
+            return
+        self._start_agent_worker(goal)
+
+    def _prompt_api_key(self, need: Dict[str, Any], goal: str) -> None:
+        from tkinter import simpledialog
+        label = need.get("label", "the agent")
+        url = need.get("url", "")
+        prompt = (f"Paste your free {label} API key"
+                  + (f"\n(get one at {url})" if url else "")
+                  + ".\n\nLeave blank to use the local model instead.")
+        key = simpledialog.askstring(f"{label} API key", prompt,
+                                     show="*", parent=self)
+        if key:
+            try:
+                from genevariate.core.chatbot import persist_api_key
+                persist_api_key(need["env"], key)
+            except Exception:
+                pass
+            self._append("sys", f"{label} key saved — you won't be asked again.",
+                         "sys")
+        else:
+            import os as _os
+            _os.environ["GENEVARIATE_AGENT_BACKEND"] = "ollama"
+            self._append("sys", "No key entered — using the local model "
+                                "instead (it will be set up automatically).",
+                         "sys")
+        self._refresh_mode_chip()
+        self._start_agent_worker(goal)
+
+    def _start_agent_worker(self, goal: str) -> None:
         self._stop_flag = False
         self._set_busy(True, "")
         self._show_stop(True)
@@ -384,13 +423,25 @@ class ChatSidebar(ttk.Frame):
         def worker() -> None:
             try:
                 from genevariate.core.chatbot import (
-                    agent_available, run_agent, unavailable_reason,
+                    agent_available, run_agent, ensure_agent_ready,
                     plan, run_plan,
                 )
                 reg = self._get_registry()
                 stop = lambda: self._stop_flag
                 used_reasoner = False
-                if agent_available():
+
+                # First use: auto-provision the reasoning stack + model.
+                if not agent_available() and not self._stop_flag:
+                    on_event("sys",
+                             "Setting up the reasoning agent (one-time: "
+                             "installs the LLM stack and pulls the model — this "
+                             "can take a while). Press Stop to skip and use the "
+                             "built-in planner.", None)
+                    ok, msg = ensure_agent_ready(
+                        lambda t: on_event("sys", t, None), should_stop=stop)
+                    on_event("sys", msg, None)
+
+                if agent_available() and not self._stop_flag:
                     reply = run_agent(
                         self.app, reg, goal, on_event,
                         progress_cb=progress_cb, should_stop=stop)
@@ -399,14 +450,8 @@ class ChatSidebar(ttk.Frame):
                         on_event("sys",
                                  f"(reasoning model problem: {reply.summary}) — "
                                  "using the built-in planner instead.", None)
+
                 if not used_reasoner and not self._stop_flag:
-                    if not agent_available():
-                        on_event("sys",
-                                 "Reasoning model unavailable "
-                                 f"({unavailable_reason()}); using the built-in "
-                                 "planner. Install it with "
-                                 "`pip install genevariate[agent]` and "
-                                 "`ollama pull llama3.1:8b`.", None)
                     plan_obj = plan(goal, self.app, reg)
                     run_plan(self.app, plan_obj, reg, on_event,
                              progress_cb=progress_cb, should_stop=stop)
