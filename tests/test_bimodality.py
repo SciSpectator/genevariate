@@ -30,6 +30,16 @@ def test_classify_bimodal_sample():
     assert tag in BIMODAL_TAGS, f"expected Bimodal/Multimodal, got {tag!r}"
 
 
+def test_classify_tight_wellseparated_bimodal():
+    # Regression: two *tight* well-separated modes (sd 0.3, gap 7) used to be
+    # mislabelled 'Uniform' because the KDE peak-detection grid was bounded at
+    # [min, max] and find_peaks ignores boundary points — so the outer modes,
+    # which sit at the extremes, were missed (worse the cleaner the modes).
+    rng = np.random.default_rng(3)
+    vals = np.concatenate([rng.normal(2, 0.3, 30), rng.normal(9, 0.3, 30)])
+    assert classify_gene_distribution(vals) in BIMODAL_TAGS
+
+
 def test_classify_normal_sample():
     rng = np.random.default_rng(11)
     vals = rng.normal(0, 1, 200)

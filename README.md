@@ -285,6 +285,10 @@ restricts the gene universe before enrichment, answering:
 
 > *Which pathways are driven by stochastic on/off switches rather than graded mean shifts?*
 
+The analysis-layer classifier (`core/analysis/bimodality.py`) evaluates its KDE on a padded
+grid so the outer modes of a mixture — which sit at the data extremes — are detected reliably
+even for tight, well-separated clusters (previously such genes could be mislabelled *Uniform*).
+
 ### Cross-platform meta-enrichment
 
 Combines per-platform rankings **before** running enrichment so pathway calls survive

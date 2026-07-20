@@ -53,7 +53,15 @@ def classify_gene_distribution(values: np.ndarray) -> str:
 
     try:
         kde = gaussian_kde(vals)
-        grid = np.linspace(vals.min(), vals.max(), min(300, vals.size))
+        # Pad the evaluation grid beyond the data range: KDE peaks for the
+        # outer modes of a mixture sit at vals.min()/vals.max(), and
+        # ``find_peaks`` never reports boundary points — so an unpadded grid
+        # silently misses the very peaks that define a bimodal distribution
+        # (worse the tighter/cleaner the modes are). A small pad plus a fixed
+        # dense grid makes those peaks interior and resolvable at any n.
+        span = vals.max() - vals.min()
+        pad = 0.10 * span if span > 0 else 1.0
+        grid = np.linspace(vals.min() - pad, vals.max() + pad, 512)
         pdf = kde(grid)
         peaks, _ = find_peaks(pdf, prominence=0.15 * pdf.max())
         if len(peaks) >= 3:

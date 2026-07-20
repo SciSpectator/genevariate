@@ -64,6 +64,10 @@ _STOPWORDS = {
     "OF", "IN", "ON", "TO", "WITH", "RUN", "SHOW", "PLOT", "PROFILE", "EXPRESSION",
     "PLATFORM", "PLATFORMS", "SCRNA", "RNASEQ", "TISSUE", "VS", "VERSUS", "FOR",
     "CELLXGENE", "MICROARRAY", "BULK", "COUNTS", "DATASET", "DATASETS",
+    # common filler / pronouns that must never be read as a gene symbol
+    "MY", "YOUR", "OUR", "ME", "US", "IT", "ITS", "FULL", "ANALYSIS", "ANALYSES",
+    "DO", "GET", "PLEASE", "ALL", "AN", "IS", "ARE", "LET", "NOW", "HELP", "WHAT",
+    "WHICH", "HOW", "THAT", "THIS", "THESE", "THOSE", "SET", "ANY", "EACH",
 }
 _GENE_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}\b")
 
@@ -126,12 +130,12 @@ def _heuristic_plan(goal: str, app, registry: Dict[str, Tool]) -> Plan:
         produced.append("scRNA")
 
     if _wants_geo(goal) and "load_geo_platform" in registry:
-        m = _GPL.search(goal)
-        if m:
-            gpl = m.group(0).upper()
-            steps.append(Step("load_geo_platform", {"platform": gpl},
-                              f"Load GEO platform {gpl}"))
-            produced.append(gpl)
+        gpls = list(dict.fromkeys(g.upper() for g in _GPL.findall(goal)))
+        if gpls:
+            for gpl in gpls:
+                steps.append(Step("load_geo_platform", {"platform": gpl},
+                                  f"Load GEO platform {gpl}"))
+                produced.append(gpl)
         elif loaded:
             produced.append(loaded[0])
 
