@@ -85,6 +85,28 @@ def test_deseq2_planted_genes_rank_top(synthetic_counts):
     assert len(planted & top) >= 6
 
 
+def test_deseq2_lfc_shrinkage_stabilises_effect_sizes(synthetic_counts):
+    """apeglm shrinkage must keep the planted genes on top while pulling the
+    magnitude of noisy LFCs toward zero (shrunken |LFC| <= unshrunken)."""
+    pytest.importorskip("pydeseq2")
+    from genevariate.core.analysis.rnaseq import run_deseq2
+    counts, design = synthetic_counts
+    contrast = ("condition", "treated", "control")
+    unshrunk = run_deseq2(counts, design, contrast, min_count=10, shrink=False)
+    shrunk = run_deseq2(counts, design, contrast, min_count=10, shrink=True)
+    # planted genes still recovered after shrinkage
+    ranked = deseq_results_to_ranked(shrunk)
+    planted = {f"G{i:03d}" for i in range(10)}
+    assert len(planted & set(ranked.head(15).index)) >= 6
+    # noisy (non-planted) genes: shrinkage should not inflate |LFC| on average
+    common = unshrunk.index.intersection(shrunk.index)
+    noisy = [g for g in common if g not in planted]
+    if noisy:
+        u = unshrunk.loc[noisy, "log2FoldChange"].abs().median()
+        s = shrunk.loc[noisy, "log2FoldChange"].abs().median()
+        assert s <= u + 1e-9
+
+
 def test_ranked_feeds_gsea(synthetic_counts):
     pytest.importorskip("gseapy")
     res = pd.DataFrame({

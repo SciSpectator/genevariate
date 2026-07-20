@@ -51,6 +51,20 @@ analysis = [
     "mygene>=3.2",
     "statsmodels>=0.14",
 ]
+# Formal bimodality gate: Hartigan dip test + Gaussian-mixture BIC mode counting
+bimodality = [
+    "diptest>=0.7",
+    "scikit-learn>=1.1",
+]
+# TF/pathway activity inference (decoupleR ULM + CollecTRI + PROGENy)
+activity = [
+    "decoupler>=1.5",
+]
+# Cross-platform batch integration (ComBat + Harmony)
+integration = [
+    "inmoose>=0.2",
+    "harmonypy>=0.0.9",
+]
 # LLM-GEO-Label-Extractor pipeline (vendored under core/llm_extractor)
 # Phase 1c semantic curator + Phase 2 MeSH agent fleet
 llm-extract = [
@@ -81,7 +95,7 @@ dev = [
     "mypy>=1.8",
 ]
 all = [
-    "genevariate[analysis,rnaseq,agent,llm-extract,dev]",
+    "genevariate[analysis,bimodality,activity,integration,rnaseq,agent,llm-extract,dev]",
 ]
 
 [project.scripts]

@@ -8,7 +8,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from genevariate.core.analysis.enrichment import rank_genes_by_condition
+from genevariate.core.analysis.enrichment import (
+    rank_genes_by_condition, benjamini_hochberg,
+)
 
 
 def test_rank_genes_by_condition_welch_signs(tiny_expression_df):
@@ -83,6 +85,37 @@ def test_shuffle_null_mean_pvalue_moderated(tiny_expression_df):
     )
     pv = out["p_value"].dropna().values
     assert 0.3 < float(pv.mean()) < 0.7
+
+
+def test_benjamini_hochberg_matches_reference():
+    """BH q-values match a hand-computed reference and are monotone."""
+    p = [0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205, 0.212, 0.216]
+    q = benjamini_hochberg(p)
+    # classic Benjamini-Hochberg (1995) worked example
+    assert np.isclose(q[0], 0.01, atol=1e-6)
+    assert np.isclose(q[1], 0.04, atol=1e-6)
+    # monotone non-decreasing in p-value order
+    order = np.argsort(p)
+    assert np.all(np.diff(q[order]) >= -1e-9)
+    assert ((q >= 0) & (q <= 1)).all()
+
+
+def test_benjamini_hochberg_handles_nan():
+    q = benjamini_hochberg([0.01, np.nan, 0.5])
+    assert np.isnan(q[1])
+    assert np.isfinite(q[0]) and np.isfinite(q[2])
+
+
+def test_rank_genes_emits_padj(tiny_expression_df):
+    """The microarray ranking path now surfaces BH-adjusted p-values."""
+    df, labels = tiny_expression_df
+    out = rank_genes_by_condition(df, labels, "case", "control", moderated=True)
+    assert "padj" in out.columns
+    pv = out["padj"].dropna().values
+    assert len(pv) > 0 and ((pv >= 0) & (pv <= 1)).all()
+    # padj >= raw p per gene (adjustment only inflates)
+    both = out.dropna(subset=["p_value", "padj"])
+    assert (both["padj"] + 1e-9 >= both["p_value"]).all()
 
 
 def test_moderated_vs_welch_on_small_sample_more_stable():

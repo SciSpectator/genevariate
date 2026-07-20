@@ -47,6 +47,7 @@ class ToolResult:
     payload: Dict[str, Any] = field(default_factory=dict)
     ok: bool = True
     report: str = ""           # optional markdown description/analysis
+    manifest: Dict[str, Any] = field(default_factory=dict)  # reproducibility record
 
 
 @dataclass

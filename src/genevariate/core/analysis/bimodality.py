@@ -28,10 +28,64 @@ from scipy.signal import find_peaks
 from scipy.stats import (gaussian_kde, norm, lognorm, gamma as gamma_dist,
                          cauchy, uniform as uniform_dist)
 
+try:  # Hartigan's dip test — the standard rigorous unimodality test.
+    from diptest import diptest as _diptest
+    _HAS_DIPTEST = True
+except Exception:  # pragma: no cover - exercised only when dep absent
+    _diptest = None
+    _HAS_DIPTEST = False
+
+try:  # GaussianMixture + BIC to count modes once unimodality is rejected.
+    from sklearn.mixture import GaussianMixture
+    _HAS_SKLEARN = True
+except Exception:  # pragma: no cover - exercised only when dep absent
+    GaussianMixture = None
+    _HAS_SKLEARN = False
+
 
 # Bimodal/heavy-tailed tags produced by the classifier below
 BIMODAL_TAGS: Tuple[str, ...] = ("Bimodal", "Multimodal")
 HEAVY_TAGS: Tuple[str, ...]   = ("Cauchy", "Lognormal")
+
+# Reject unimodality when the dip-test p-value falls below this.
+DIP_ALPHA: float = 0.05
+
+
+def _gmm_n_components(vals: np.ndarray, max_k: int = 4) -> int:
+    """Number of Gaussian components minimising BIC (>=2 given the dip rejected
+    unimodality). Falls back to 2 when sklearn is unavailable or the fit fails."""
+    if not _HAS_SKLEARN or vals.size < 20:
+        return 2
+    X = vals.reshape(-1, 1)
+    best_k, best_bic = 2, np.inf
+    for k in range(2, max_k + 1):
+        if k >= vals.size:
+            break
+        try:
+            gmm = GaussianMixture(n_components=k, covariance_type="full",
+                                  random_state=0, n_init=1)
+            gmm.fit(X)
+            bic = gmm.bic(X)
+        except Exception:
+            continue
+        if bic < best_bic:
+            best_bic, best_k = bic, k
+    return best_k
+
+
+def _diptest_class(vals: np.ndarray) -> Optional[str]:
+    """Return ``Bimodal``/``Multimodal`` if Hartigan's dip test rejects
+    unimodality, else ``None`` (defer to model selection). ``None`` when diptest
+    is unavailable so the caller falls back to the KDE peak method."""
+    if not _HAS_DIPTEST:
+        return None
+    try:
+        _, pval = _diptest(vals)
+    except Exception:
+        return None
+    if pval >= DIP_ALPHA:
+        return None  # unimodal — let log-likelihood model selection decide
+    return "Multimodal" if _gmm_n_components(vals) >= 3 else "Bimodal"
 
 
 def classify_gene_distribution(values: np.ndarray) -> str:
@@ -50,6 +104,13 @@ def classify_gene_distribution(values: np.ndarray) -> str:
         return "Not Enough Data"
     if np.std(vals) < 1e-6:
         return "Effectively Constant"
+
+    # Preferred gate: Hartigan's dip test (rigorous unimodality test) + GMM/BIC
+    # to count modes. Falls through to the KDE peak heuristic when diptest is
+    # not installed, preserving the original behaviour.
+    dip = _diptest_class(vals)
+    if dip is not None:
+        return dip
 
     try:
         kde = gaussian_kde(vals)

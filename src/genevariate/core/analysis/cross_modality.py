@@ -146,8 +146,14 @@ def compare_gene_across_modalities(sources: Dict[str, pd.DataFrame],
                                    method: str = "zscore") -> Dict[str, object]:
     """Compare one gene's distribution across data modalities on a common scale.
 
-    ``sources`` maps a source/platform name to its platform DataFrame. Returns a
-    dict with:
+    ``sources`` maps a source/platform name to its platform DataFrame. ``method``
+    is the scale-harmonisation strategy: ``zscore``/``rank``/``none`` operate on
+    the gene vector alone, while ``combat`` first runs ComBat batch correction on
+    the matrix of genes shared across sources (real batch-effect removal, not
+    mere rescaling) and then compares the corrected values directly. ``combat``
+    silently falls back to ``zscore`` if no ComBat implementation is installed.
+
+    Returns a dict with:
       ``table``       per-source stats (modality, n, mean, std, cv, class),
       ``pairwise``    harmonised pairwise KS D + p between every source pair,
       ``harmonized``  the harmonised vectors (for plotting),
@@ -156,6 +162,17 @@ def compare_gene_across_modalities(sources: Dict[str, pd.DataFrame],
       ``report``      markdown description + analysis.
     """
     gene = str(gene).strip()
+
+    # Batch correction happens on the full shared-gene matrix, not one gene, so
+    # do it up front and then compare the corrected values without re-scaling.
+    if method == "combat":
+        try:
+            from genevariate.core.analysis.integration import combat_correct
+            sources = combat_correct(sources)
+            method = "none"
+        except Exception:
+            method = "zscore"
+
     raw: Dict[str, np.ndarray] = {}
     rows: List[Dict[str, object]] = []
     for name, df in sources.items():
@@ -245,7 +262,14 @@ def _cross_modality_report(gene, table, pairwise, method, concordant) -> str:
 # -----------------------------------------------------------------
 def _corr_against(expr: pd.DataFrame, x: np.ndarray,
                   method: str = "pearson") -> pd.Series:
-    """Correlate every column of ``expr`` (samples x genes) with vector ``x``."""
+    """Correlate every column of ``expr`` (samples x genes) with vector ``x``.
+
+    ``method`` is one of ``pearson``, ``spearman`` or ``rho``. ``rho`` is Lovell's
+    proportionality metric (2015), which is robust to the compositional bias that
+    inflates Pearson/Spearman correlations on normalised (CPM/log-CPM) data. It
+    treats the values as log-expression and returns
+    ``1 - var(a - b) / (var(a) + var(b))``.
+    """
     X = expr.to_numpy(dtype=float)
     xv = np.asarray(x, dtype=float)
     # keep samples where the query gene is finite
@@ -254,6 +278,8 @@ def _corr_against(expr: pd.DataFrame, x: np.ndarray,
     xv = xv[good]
     if xv.size < 3:
         return pd.Series(dtype=float)
+    if method == "rho":
+        return _rho_against(pd.DataFrame(X, columns=expr.columns), xv)
     if method == "spearman":
         xv = pd.Series(xv).rank().to_numpy()
         X = pd.DataFrame(X).rank().to_numpy()
@@ -268,15 +294,44 @@ def _corr_against(expr: pd.DataFrame, x: np.ndarray,
     return pd.Series(r, index=expr.columns)
 
 
+def _rho_against(expr: pd.DataFrame, x: np.ndarray) -> pd.Series:
+    """Lovell's proportionality rho of every column of ``expr`` against ``x``.
+
+    ``rho = 1 - var(x - g) / (var(x) + var(g))``, computed per gene column,
+    NaN-safe. Values near 1 indicate proportional (co-expressed) log profiles;
+    near 0 unrelated; negative anti-proportional.
+    """
+    X = expr.to_numpy(dtype=float)
+    xv = np.asarray(x, dtype=float)
+    n = xv.size
+    if n < 3:
+        return pd.Series(dtype=float)
+    var_x = float(np.var(xv, ddof=1))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        diff = X - xv[:, None]
+        # per-column variance ignoring NaNs (ddof=1)
+        cnt = np.sum(np.isfinite(X), axis=0)
+        mean_g = np.nanmean(X, axis=0)
+        var_g = np.nansum((X - mean_g) ** 2, axis=0) / np.maximum(cnt - 1, 1)
+        mean_d = np.nanmean(diff, axis=0)
+        var_d = np.nansum((diff - mean_d) ** 2, axis=0) / np.maximum(cnt - 1, 1)
+        denom = var_x + var_g
+        rho = np.where(denom > 0, 1.0 - var_d / denom, np.nan)
+    return pd.Series(rho, index=expr.columns)
+
+
 def gene_coexpression(df: pd.DataFrame, gene: str,
                       method: str = "pearson",
                       top_n: int = 25,
                       min_abs: float = 0.0) -> pd.DataFrame:
     """Genes whose expression is connected to ``gene`` within one source.
 
-    Returns a gene-indexed DataFrame with columns ``r`` and ``abs_r``, sorted by
-    ``abs_r`` descending, filtered to ``|r| >= min_abs`` and the top ``top_n``.
-    The query gene itself is excluded.
+    ``method`` is ``pearson``, ``spearman`` or ``rho`` (Lovell's proportionality,
+    which avoids the compositional bias of correlation on normalised data).
+    Returns a gene-indexed DataFrame with columns ``r`` and ``abs_r`` (``r`` holds
+    the proportionality statistic when ``method='rho'``), sorted by ``abs_r``
+    descending, filtered to ``|r| >= min_abs`` and the top ``top_n``. The query
+    gene itself is excluded.
     """
     x = _gene_vector(df, gene)
     if x is None:

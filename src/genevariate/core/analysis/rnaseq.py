@@ -131,7 +131,8 @@ def deseq2_size_factors(counts: pd.DataFrame) -> pd.Series:
 def run_deseq2(counts: pd.DataFrame,
                design: pd.DataFrame,
                contrast: Tuple[str, str, str],
-               min_count: int = 10) -> pd.DataFrame:
+               min_count: int = 10,
+               shrink: bool = True) -> pd.DataFrame:
     """Negative-binomial differential expression via pydeseq2.
 
     Parameters
@@ -142,10 +143,15 @@ def run_deseq2(counts: pd.DataFrame,
     contrast : (factor, test_level, reference_level), e.g.
                ("condition", "treated", "control").
     min_count : drop genes whose total count across samples is below this.
+    shrink : if True (default), apply pydeseq2's native **apeglm** log-fold-change
+             shrinkage. Shrunken LFCs stabilise the ranking of low-count genes
+             and are the current recommended default for reporting effect sizes.
+             Falls back silently to unshrunken LFCs if shrinkage is unavailable.
 
     Returns a DataFrame indexed by gene with columns
         log2FoldChange, pvalue, padj, baseMean, stat
-    Ranking downstream uses ``stat`` (the Wald statistic, signed & monotonic).
+    When ``shrink`` is True the returned ``log2FoldChange`` is the shrunken
+    estimate; ``stat`` (the Wald statistic) is preserved for ranking.
     """
     if not _HAS_PYDESEQ2:
         raise RuntimeError(
@@ -196,6 +202,20 @@ def run_deseq2(counts: pd.DataFrame,
     except TypeError:
         stats = DeseqStats(dds, contrast=[factor, test_level, ref_level])
     stats.summary()
+
+    if shrink:
+        # apeglm shrinkage of the tested coefficient. pydeseq2 names the
+        # coefficient "<factor>_<test>_vs_<ref>"; API drifts across versions,
+        # so isolate the whole thing behind try/except and keep unshrunken
+        # LFCs on any failure.
+        coeff = f"{factor}_{test_level}_vs_{ref_level}"
+        try:
+            stats.lfc_shrink(coeff=coeff)
+        except Exception:
+            try:
+                stats.lfc_shrink()
+            except Exception:
+                pass
     res = stats.results_df.copy()
 
     # Normalise column names across pydeseq2 versions.

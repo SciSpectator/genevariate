@@ -47,8 +47,46 @@ def test_registry_has_core_tools():
                  "variability_enrichment", "rank_genes", "run_ngs_de",
                  "classify_distributions", "meta_enrichment",
                  "gene_distribution", "compare_gene",
-                 "compare_modalities", "gene_connections"):
+                 "compare_modalities", "gene_connections",
+                 "activity_inference", "run_analysis_code"):
         assert name in reg
+
+
+def test_run_analysis_code_tool_executes_snippet():
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["run_analysis_code"]
+    code = ("means = platforms['GPLX'][['G0','G1']].mean()\n"
+            "print('n_samples', platforms['GPLX'].shape[0])\n"
+            "result = float(means['G0'])")
+    resolved = tool.coerce(tool.resolver(app, {"code": code}))
+    res = tool.executor(app, resolved, lambda v, t: None)
+    assert res.ok
+    assert "n_samples 6" in res.payload["stdout"]
+    assert isinstance(res.payload["result"], float)
+
+
+def test_run_analysis_code_blocks_imports_and_dunder():
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["run_analysis_code"]
+    for bad in ("import os\nresult = 1",
+                "result = (1).__class__.__bases__",
+                "result = open('/etc/passwd').read()"):
+        resolved = tool.coerce(tool.resolver(app, {"code": bad}))
+        res = tool.executor(app, resolved, lambda v, t: None)
+        assert res.ok is False
+        assert "blocked" in res.summary.lower() or "not run" in res.summary.lower()
+
+
+def test_run_analysis_code_reports_runtime_error():
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["run_analysis_code"]
+    resolved = tool.coerce(tool.resolver(app, {"code": "result = 1/0"}))
+    res = tool.executor(app, resolved, lambda v, t: None)
+    assert res.ok is False
+    assert "ZeroDivisionError" in res.summary
 
 
 def _coexpr_platform(seed, n=40, scale=1.0, offset=7.0):

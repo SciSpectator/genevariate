@@ -18,6 +18,8 @@ from genevariate.core.analysis.bimodality import (
     classify_distributions,
     filter_ranked_by_distribution,
     distribution_summary,
+    _diptest_class,
+    _HAS_DIPTEST,
     BIMODAL_TAGS,
 )
 
@@ -79,6 +81,24 @@ def test_filter_ranked_by_distribution(bimodal_expression_df):
     # Only bimodal rows should remain after bimodal filtering
     assert "GBIMODAL" in [i.upper() for i in gated.index]
     assert "GNORMAL" not in [i.upper() for i in gated.index]
+
+
+@pytest.mark.skipif(not _HAS_DIPTEST, reason="diptest not installed")
+def test_diptest_gate_rejects_unimodal_and_flags_bimodal():
+    """Hartigan's dip test: unimodal defers (None), clear bimodal is flagged."""
+    rng = np.random.default_rng(5)
+    uni = rng.normal(0, 1, 300)
+    assert _diptest_class(uni) is None            # unimodal -> defer to model fit
+    bi = np.concatenate([rng.normal(-5, 0.5, 200), rng.normal(5, 0.5, 200)])
+    assert _diptest_class(bi) in BIMODAL_TAGS      # rejects unimodality
+
+
+@pytest.mark.skipif(not _HAS_DIPTEST, reason="diptest not installed")
+def test_diptest_path_used_by_classifier():
+    rng = np.random.default_rng(6)
+    bi = np.concatenate([rng.normal(-6, 0.4, 200), rng.normal(6, 0.4, 200)])
+    assert classify_gene_distribution(bi) in BIMODAL_TAGS
+    assert classify_gene_distribution(rng.normal(0, 1, 300)) == "Normal"
 
 
 def test_distribution_summary_sums_to_one(bimodal_expression_df):

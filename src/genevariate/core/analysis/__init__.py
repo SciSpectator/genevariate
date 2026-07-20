@@ -5,6 +5,7 @@ from .enrichment import (
     run_prerank_gsea,
     rank_genes_by_condition,
     enrichment_report_markdown,
+    benjamini_hochberg,
     DEFAULT_LIBRARIES,
 )
 from .variability import (
@@ -49,12 +50,23 @@ from .cross_modality import (
     gene_coexpression,
     coexpression_consensus,
 )
+from .integration import (
+    common_gene_matrix,
+    combat_correct,
+    harmony_embed,
+)
+from .activity import (
+    tf_activity,
+    pathway_activity,
+    run_activity,
+)
 
 __all__ = [
     "run_enrichr",
     "run_prerank_gsea",
     "rank_genes_by_condition",
     "enrichment_report_markdown",
+    "benjamini_hochberg",
     "DEFAULT_LIBRARIES",
     "rank_genes_by_variability",
     "run_variability_gsea",
@@ -81,4 +93,10 @@ __all__ = [
     "compare_gene_across_modalities",
     "gene_coexpression",
     "coexpression_consensus",
+    "common_gene_matrix",
+    "combat_correct",
+    "harmony_embed",
+    "tf_activity",
+    "pathway_activity",
+    "run_activity",
 ]

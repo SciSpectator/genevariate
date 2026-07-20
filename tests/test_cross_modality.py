@@ -80,6 +80,16 @@ def test_gene_coexpression_finds_partners():
     assert abs(out.loc["NOISE", "r"]) < 0.3
 
 
+def test_gene_coexpression_rho_proportionality():
+    """Lovell's rho ranks the proportional partner high and noise low."""
+    df = _source(1, 100, 1.0, 7.0)
+    out = gene_coexpression(df, "TP53", method="rho", top_n=25)
+    assert out.loc["MDM2", "r"] > 0.6      # proportional log profile
+    assert abs(out.loc["NOISE", "r"]) < 0.5
+    # MDM2 (proportional) should outrank NOISE by |rho|
+    assert out.loc["MDM2", "abs_r"] > out.loc["NOISE", "abs_r"]
+
+
 def test_gene_coexpression_missing_gene_raises():
     df = _source(1, 20, 1.0, 7.0)
     try:

@@ -65,6 +65,40 @@ def test_stouffer_handles_missing_platforms_per_gene():
     assert np.isclose(out.loc["B", "stouffer_z"], 4.0 / np.sqrt(2.0))
 
 
+def _effect_platform(genes, logfc, tstat):
+    return pd.DataFrame({"logFC": logfc, "t_stat": tstat, "rank": tstat},
+                        index=genes)
+
+
+def test_random_effects_pools_effects_and_reports_heterogeneity():
+    """DerSimonian-Laird pools concordant effects and flags heterogeneity."""
+    genes = ["CONC", "HET"]
+    # CONC: same effect + same SE across studies (no heterogeneity, I2~0)
+    # HET: opposite large effects (high heterogeneity, I2 large)
+    p1 = _effect_platform(genes, logfc=[1.0, 2.0], tstat=[5.0, 5.0])
+    p2 = _effect_platform(genes, logfc=[1.0, -2.0], tstat=[5.0, -5.0])
+    p3 = _effect_platform(genes, logfc=[1.0, 2.0], tstat=[5.0, 5.0])
+    out = combine_ranks({"P1": p1, "P2": p2, "P3": p3}, method="random_effects")
+    for col in ("pooled_effect", "se", "z", "p_value", "padj", "tau2", "I2",
+                "n_platforms", "rank"):
+        assert col in out.columns
+    assert (out["n_platforms"] == 3).all()
+    # concordant gene: pooled ~1, low heterogeneity
+    assert np.isclose(out.loc["CONC", "pooled_effect"], 1.0, atol=1e-6)
+    assert out.loc["CONC", "I2"] < 5.0
+    # discordant gene: high heterogeneity
+    assert out.loc["HET", "I2"] > out.loc["CONC", "I2"]
+    assert ((out["padj"] >= 0) & (out["padj"] <= 1)).all()
+
+
+def test_random_effects_needs_two_platforms_per_gene():
+    genes = ["A", "B"]
+    p1 = _effect_platform(["A"], [1.0], [5.0])
+    p2 = _effect_platform(["A"], [1.0], [5.0])
+    out = combine_ranks({"P1": p1, "P2": p2}, method="random_effects")
+    assert "A" in out.index and "B" not in out.index
+
+
 def test_combine_ranks_unknown_method_raises():
     with pytest.raises(ValueError):
         combine_ranks({}, method="bogus")

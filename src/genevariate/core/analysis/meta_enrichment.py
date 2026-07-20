@@ -145,6 +145,87 @@ def _stouffer_z(per_platform: Dict[str, pd.DataFrame],
 
 
 # -----------------------------------------------------------------
+# DerSimonian-Laird random-effects effect-size meta-analysis
+# -----------------------------------------------------------------
+def _random_effects(per_platform: Dict[str, pd.DataFrame],
+                    effect_col: str = "logFC",
+                    stat_col: str = "t_stat") -> pd.DataFrame:
+    """
+    Random-effects (DerSimonian-Laird 1986) meta-analysis of per-platform
+    effect sizes, with between-study heterogeneity (tau^2, I^2).
+
+    Each platform ranking must expose an effect column (``logFC``) and a signed
+    test statistic (``t_stat``); the per-study standard error is recovered as
+    ``|logFC / t_stat|``. Genes measured in fewer than two platforms are dropped.
+
+    Returns a gene-indexed DataFrame with columns:
+        pooled_effect, se, z, p_value, padj, tau2, I2, Q, n_platforms, rank
+    ``rank`` is the pooled z (signed, monotonic) so it feeds GSEA prerank.
+    """
+    from .enrichment import benjamini_hochberg
+
+    eff: Dict[str, pd.Series] = {}
+    var: Dict[str, pd.Series] = {}
+    for name, r in per_platform.items():
+        if effect_col not in r.columns or stat_col not in r.columns:
+            raise ValueError(
+                f"{name} ranking needs '{effect_col}' and '{stat_col}' columns "
+                "for random-effects meta-analysis")
+        y = pd.to_numeric(r[effect_col], errors="coerce")
+        t = pd.to_numeric(r[stat_col], errors="coerce")
+        se = (y / t).abs().replace([np.inf, -np.inf], np.nan)
+        idx = r.index.astype(str).str.upper()
+        y.index = idx
+        se.index = idx
+        y = y[~y.index.duplicated(keep="first")]
+        se = se[~se.index.duplicated(keep="first")]
+        eff[name] = y
+        var[name] = se ** 2
+
+    all_genes = sorted(set().union(*[s.index for s in eff.values()]))
+    if not all_genes:
+        return pd.DataFrame()
+    Y = pd.DataFrame({n: s.reindex(all_genes) for n, s in eff.items()}).values
+    V = pd.DataFrame({n: s.reindex(all_genes) for n, s in var.items()}).values
+
+    valid = np.isfinite(Y) & np.isfinite(V) & (V > 0)
+    Y = np.where(valid, Y, np.nan)
+    V = np.where(valid, V, np.nan)
+    k = valid.sum(axis=1)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        W = 1.0 / V
+        sumW = np.nansum(W, axis=1)
+        ybar_fixed = np.nansum(W * Y, axis=1) / sumW
+        Q = np.nansum(W * (Y - ybar_fixed[:, None]) ** 2, axis=1)
+        dfree = np.maximum(k - 1, 0)
+        C = sumW - np.nansum(W ** 2, axis=1) / sumW
+        tau2 = np.where(C > 0, np.maximum(0.0, (Q - dfree) / C), 0.0)
+        Ws = 1.0 / (V + tau2[:, None])
+        sumWs = np.nansum(Ws, axis=1)
+        pooled = np.nansum(Ws * Y, axis=1) / sumWs
+        se = np.sqrt(1.0 / sumWs)
+        z = pooled / se
+        I2 = np.where(Q > 0, np.maximum(0.0, (Q - dfree) / Q) * 100.0, 0.0)
+
+    p = 2.0 * stats.norm.sf(np.abs(z))
+    out = pd.DataFrame({
+        "pooled_effect": pooled,
+        "se": se,
+        "z": z,
+        "p_value": p,
+        "tau2": tau2,
+        "I2": I2,
+        "Q": Q,
+        "n_platforms": k,
+        "rank": z,
+    }, index=all_genes)
+    out = out[out["n_platforms"] >= 2]
+    out["padj"] = benjamini_hochberg(out["p_value"].values)
+    return out.sort_values("rank", ascending=False)
+
+
+# -----------------------------------------------------------------
 # Public entry points
 # -----------------------------------------------------------------
 def combine_ranks(per_platform: Dict[str, pd.DataFrame],
@@ -156,12 +237,16 @@ def combine_ranks(per_platform: Dict[str, pd.DataFrame],
 
     per_platform: {platform_name -> ranking_df} where each df has either
         a 'rank' column (for rank_product) or a stat column (for stouffer).
-    method: 'rank_product' or 'stouffer'.
+    method: 'rank_product', 'stouffer', or 'random_effects' (DerSimonian-Laird
+        effect-size meta-analysis with I^2 heterogeneity; needs 'logFC' + a
+        signed stat column).
     """
     if method == "rank_product":
         return _rank_product(per_platform)
     if method == "stouffer":
         return _stouffer_z(per_platform, stat_col=stat_col, weights=weights)
+    if method == "random_effects":
+        return _random_effects(per_platform, stat_col=stat_col)
     raise ValueError(f"unknown method {method!r}")
 
 

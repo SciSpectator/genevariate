@@ -184,7 +184,8 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   harmonised), `gene_connections` (co-expression links within a source or consensus across
   modalities), `classify_distributions` (modality landscape), `condition_enrichment`,
   `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
-  Stouffer + GSEA), `rank_genes`, `run_ngs_de`.
+  Stouffer / random-effects + GSEA), `activity_inference` (TF/pathway activity via decoupleR),
+  `run_analysis_code` (sandboxed Python over the loaded platforms), `rank_genes`, `run_ngs_de`.
 - **Robust to Llama tool-call quirks:** Llama-3.x occasionally emits a tool call in its
   *native text* form (`<function=name>{…}</function>`) inside the message content instead of
   through the structured tool-calls API — most often for the tool with the most parameters
@@ -321,6 +322,10 @@ restricts the gene universe before enrichment, answering:
 The analysis-layer classifier (`core/analysis/bimodality.py`) evaluates its KDE on a padded
 grid so the outer modes of a mixture — which sit at the data extremes — are detected reliably
 even for tight, well-separated clusters (previously such genes could be mislabelled *Uniform*).
+Before the KDE heuristic it applies a formal **Hartigan dip test** of unimodality
+(`diptest`, α = 0.05); when unimodality is rejected the mode count is set by a **Gaussian-mixture
+BIC** search (`sklearn`), so Bimodal/Multimodal calls rest on a hypothesis test rather than
+peak-counting. Both are optional — absent the packages the classifier falls back to the KDE path.
 
 ### Cross-platform meta-enrichment
 
@@ -329,12 +334,78 @@ GPL batch effects. Two combiners:
 
 - **rank-product** — geometric mean of per-platform ranks (Breitling 2004); non-parametric
 - **Stouffer** — weighted-z combination of signed t-statistics; preserves direction
+- **random-effects** — DerSimonian–Laird pooling of per-platform effect sizes (recovering each
+  study's standard error as `|logFC / t|`), reporting a pooled effect, z/p, BH-adjusted q, and
+  the between-study heterogeneity (`tau²`, `I²`, Cochran's `Q`). Genes seen on fewer than two
+  platforms are dropped, so the meta-estimate is only formed where replication exists.
 
 ### Embedding-clustered pseudo-cohorts
 
 Uses `nomic-embed-text` (same backbone as `MemoryAgent`) to vectorise LLM-curated condition
 labels and cluster samples via KMeans — no manual case/control assignment needed. Falls
 back to TF-IDF char n-grams when Ollama is unavailable.
+
+### Multiple-testing correction & effect sizes
+
+Every per-gene test now reports a **Benjamini–Hochberg** adjusted q-value alongside the raw
+p-value. `benjamini_hochberg` (`core/analysis/enrichment.py`) is a NaN-safe, monotone-enforced
+step-up procedure; `rank_genes_by_condition` emits a `padj` column so results are ranked and
+thresholded on FDR rather than nominal p, and the random-effects meta-combiner reuses the same
+routine. Effect sizes (log-fold-change / pooled effect) are carried through unchanged so calls
+are judged on both significance *and* magnitude.
+
+### DESeq2 LFC shrinkage
+
+`run_deseq2` gains a `shrink=True` flag that applies pydeseq2's native **apeglm** shrinkage
+(`DeseqStats.lfc_shrink`) to the fitted coefficient. This pulls the magnitude of noisy,
+low-information log-fold-changes toward zero while leaving well-powered genes essentially
+untouched, giving stable effect-size estimates for ranking and GSEA. No new dependency — it
+uses the shrinkage already shipped with `pydeseq2`, and silently degrades to unshrunken LFCs if
+the coefficient name can't be resolved across pydeseq2 API versions.
+
+### Compositional-bias-robust co-expression (proportionality ρ)
+
+Correlation on relative (compositional) abundance data is biased. `gene_coexpression` /
+`gene_connections` add a `rho` method computing **Lovell's proportionality**
+`ρ = 1 − var(a−b) / (var(a) + var(b))` on log-expression, a compositionally coherent alternative
+to Pearson/Spearman that is robust to library-size/normalisation artefacts (pure numpy, NaN-safe
+per column).
+
+### Activity inference (TF & pathway)
+
+`core/analysis/activity.py` infers **transcription-factor** and **pathway** activity per sample
+from an expression matrix via [decoupleR](https://github.com/saezlab/decoupler)'s univariate
+linear model (ULM), using **CollecTRI** (TF→target regulons) and **PROGENy** (pathway response
+signatures). The API is version-safe across decoupler 1.x (`dc.run_ulm`, `dc.get_collectri`) and
+2.x (`dc.mt.ulm`, `dc.op.collectri`). Exposed to the assistant as the `activity_inference` tool;
+`tf_activity` / `pathway_activity` / `run_activity` are the headless entry points. Optional dep —
+a clear message points to `decoupler` when absent.
+
+### Cross-platform batch integration
+
+`core/analysis/integration.py` harmonises multiple platforms onto their shared genes
+(`common_gene_matrix` → matrix + batch vector) and removes batch effects with **ComBat**
+(`combat_correct`, trying `inmoose.pycombat` / `pycombat` / `combat.pycombat` backends) or a
+**Harmony** embedding (`harmony_embed` via `harmonypy` + PCA). `compare_gene_across_modalities`
+can pre-apply ComBat (`method="combat"`) so cross-source distribution tests run on
+batch-corrected values.
+
+### Per-run reproducibility manifest
+
+`core/reproducibility.py` captures four pillars for any analysis: **parameters**, **package
+versions** (numpy/pandas/scipy/pydeseq2/gseapy/…), the **random seed**, and a content-sensitive
+**SHA-256 hash** of every input DataFrame/array. `build_manifest` returns a JSON-able record
+(with environment + timestamp) and `manifest_to_markdown` renders it for the report window; the
+assistant's condition/NGS/meta tools attach a manifest so a result can be re-derived exactly.
+
+### Sandboxed analysis code execution
+
+The `run_analysis_code` assistant tool lets the agent run a short Python snippet against the
+loaded platforms in a restricted sandbox (`core/chatbot/code_exec.py`): the source is AST-validated
+(no imports, no dunder access, denylisted names rejected), executed with a curated namespace
+(`pd`, `np`, a copy of the platforms, and the analysis helpers) and restricted builtins under a
+daemon-thread timeout. It returns captured stdout plus a `result` table, enabling ad-hoc analysis
+without exposing the host.
 
 ---
 

@@ -43,6 +43,34 @@ DEFAULT_LIBRARIES: Tuple[str, ...] = (
 # -----------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------
+def benjamini_hochberg(pvalues: Sequence[float]) -> np.ndarray:
+    """
+    Benjamini-Hochberg FDR-adjusted p-values (q-values).
+
+    NaN p-values are ignored in the ranking and returned as NaN. The result
+    is the standard step-up BH adjustment with monotonicity enforced.
+    """
+    p = np.asarray(pvalues, dtype=float)
+    out = np.full(p.shape, np.nan, dtype=float)
+    finite = np.isfinite(p)
+    m = int(finite.sum())
+    if m == 0:
+        return out
+    idx = np.where(finite)[0]
+    pv = p[idx]
+    order = np.argsort(pv)
+    ranked = pv[order]
+    n = m
+    adj = ranked * n / (np.arange(1, n + 1))
+    # enforce monotonicity from the largest p-value downward
+    adj = np.minimum.accumulate(adj[::-1])[::-1]
+    adj = np.clip(adj, 0.0, 1.0)
+    q = np.empty(n, dtype=float)
+    q[order] = adj
+    out[idx] = q
+    return out
+
+
 def _expr_from_canonical(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     """Split canonical (GSM|series_id|gene..) into (expr genes x samples, GSM index)."""
     meta_cols = [c for c in ("GSM", "series_id") if c in df.columns]
@@ -131,9 +159,10 @@ def rank_genes_by_condition(df: pd.DataFrame,
         For raw RNA-seq counts, prefer `pydeseq2` (see README).
 
     Returns a DataFrame indexed by gene with columns:
-        mean_case, mean_control, logFC, t_stat, p_value, rank
-    Ranking uses the (moderated) t-stat, which is monotonic in both
-    magnitude and direction — suitable for gseapy prerank.
+        mean_case, mean_control, logFC, t_stat, p_value, padj, rank
+    `padj` is the Benjamini-Hochberg FDR-adjusted p-value. Ranking uses the
+    (moderated) t-stat, which is monotonic in both magnitude and direction —
+    suitable for gseapy prerank.
     """
     expr, gsm = _expr_from_canonical(df)
     labels = {str(k).upper(): v for k, v in labels.items()}
@@ -194,6 +223,7 @@ def rank_genes_by_condition(df: pd.DataFrame,
         "t_stat": t,
         "p_value": pd.Series(p, index=t.index),
     })
+    out["padj"] = benjamini_hochberg(out["p_value"].values)
     out["rank"] = out["t_stat"].fillna(0.0)
     out = out.sort_values("rank", ascending=False)
     return out

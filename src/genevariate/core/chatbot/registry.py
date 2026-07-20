@@ -121,6 +121,29 @@ def _gsea_term_count(gsea: Optional[pd.DataFrame]) -> int:
     return int(len(gsea))
 
 
+def _manifest(tool: str, resolved: Dict[str, Any],
+              inputs: Optional[Dict[str, Any]] = None,
+              seed: Optional[int] = None) -> Dict[str, Any]:
+    """Build a per-run reproducibility manifest for a tool result. Never raises."""
+    try:
+        from genevariate.core.reproducibility import build_manifest
+        return build_manifest(tool, params=resolved, inputs=inputs, seed=seed)
+    except Exception:
+        return {}
+
+
+def _append_manifest(report: str, manifest: Dict[str, Any]) -> str:
+    """Append the reproducibility manifest block to a markdown report."""
+    if not manifest:
+        return report
+    try:
+        from genevariate.core.reproducibility import manifest_to_markdown
+        block = manifest_to_markdown(manifest)
+    except Exception:
+        return report
+    return (report + "\n\n" + block) if report else block
+
+
 def _default_case_control(df: pd.DataFrame, column: str) -> Tuple[str, str]:
     vals = [v for v in df[column].astype(str) if v and v.lower() != "nan"]
     common = [v for v, _ in Counter(vals).most_common()]
@@ -212,14 +235,17 @@ def build_registry(app) -> Dict[str, Tool]:
         n = _gsea_term_count(gsea)
         top = gsea.head(15) if n else ranked.head(15)
         comparison = f"{case} vs {control} on {resolved.get('platform')}"
+        manifest = _manifest("condition_enrichment", resolved,
+                             inputs={"platform": df}, seed=42)
         try:
             report = enrichment_report_markdown(None, gsea, comparison)
         except Exception:
             report = ""
+        report = _append_manifest(report, manifest)
         return ToolResult(
             f"Condition enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, report=report,
+            table=top, report=report, manifest=manifest,
             payload={"ranked": ranked, "gsea": gsea, "report": report})
 
     # ---- variability_enrichment ---------------------------------
@@ -338,10 +364,14 @@ def build_registry(app) -> Dict[str, Tool]:
 
         extra = f" Registered normalised counts as platform {registered!r}." \
             if registered else ""
+        manifest = _manifest("run_ngs_de", resolved,
+                             inputs={"counts": path}, seed=42)
+        report = _append_manifest("", manifest)
         return ToolResult(
             f"DESeq2 DE + GSEA ({case} vs {control}): {len(res)} genes tested, "
             f"{n} enriched term(s).{extra}",
             table=(gsea.head(15) if n else ranked.head(15)),
+            report=report, manifest=manifest,
             payload={"deseq": res, "ranked": ranked, "gsea": gsea,
                      "registered": registered})
 
@@ -403,7 +433,8 @@ def build_registry(app) -> Dict[str, Tool]:
             out["platforms"] = list(_platforms(app).keys())
         out.setdefault("libraries", libs_default)
         m = str(raw.get("method") or "rank_product").strip().lower()
-        out["method"] = m if m in ("rank_product", "stouffer") else "rank_product"
+        out["method"] = (m if m in ("rank_product", "stouffer", "random_effects")
+                         else "rank_product")
         return out
 
     def _meta_exec(app, resolved, progress_cb):
@@ -457,17 +488,21 @@ def build_registry(app) -> Dict[str, Tool]:
             gsea = None
         comparison = (f"{case} vs {control}" if case and control
                       else "case vs control")
+        manifest = _manifest("meta_enrichment", resolved,
+                             inputs={k: _platforms(app)[k] for k in used
+                                     if k in _platforms(app)}, seed=42)
         try:
             report = meta_enrichment_report_markdown(
                 combined, gsea, used, comparison, method)
         except Exception:
             report = ""
+        report = _append_manifest(report, manifest)
         n = _gsea_term_count(gsea)
         top = gsea.head(15) if n else combined.head(15)
         return ToolResult(
             f"Cross-platform meta-enrichment ({method}) over {len(used)} "
             f"platform(s): {n} consensus term(s).",
-            table=top, report=report,
+            table=top, report=report, manifest=manifest,
             payload={"combined": combined, "gsea": gsea,
                      "platforms": used, "report": report})
 
@@ -574,8 +609,9 @@ def build_registry(app) -> Dict[str, Tool]:
             ToolParam("control_label", "str", required=False,
                       help="Group treated as 'control'."),
             ToolParam("method", "str", required=False, default="rank_product",
-                      choices=("rank_product", "stouffer"),
-                      help="Rank-combination method."),
+                      choices=("rank_product", "stouffer", "random_effects"),
+                      help="Rank-combination method (random_effects = "
+                           "DerSimonian-Laird effect-size meta-analysis)."),
             ToolParam("libraries", "str", required=False, default=libs_default,
                       help="Comma-separated Enrichr gene-set libraries."),
         ],
@@ -723,7 +759,7 @@ def build_registry(app) -> Dict[str, Tool]:
     def _cross_resolver(app, raw):
         out = _cmp_resolver(app, raw)  # reuse platforms parsing
         m = str(raw.get("method") or "zscore").strip().lower()
-        out["method"] = m if m in ("zscore", "rank", "none") else "zscore"
+        out["method"] = m if m in ("zscore", "rank", "none", "combat") else "zscore"
         return out
 
     def _cross_exec(app, resolved, progress_cb):
@@ -766,8 +802,9 @@ def build_registry(app) -> Dict[str, Tool]:
             ToolParam("platforms", "list", required=False,
                       help="Sources/modalities to compare (defaults to all loaded)."),
             ToolParam("method", "str", required=False, default="zscore",
-                      choices=("zscore", "rank", "none"),
-                      help="Scale-harmonisation method."),
+                      choices=("zscore", "rank", "none", "combat"),
+                      help="Scale-harmonisation method ('combat' does real "
+                           "batch-effect correction on shared genes)."),
         ],
         resolver=_cross_resolver, executor=_cross_exec,
         examples=("compare TP53 across microarray and rna-seq modalities",
@@ -778,7 +815,7 @@ def build_registry(app) -> Dict[str, Tool]:
     def _conn_resolver(app, raw):
         out = _cmp_resolver(app, raw)  # platforms parsing
         m = str(raw.get("method") or "pearson").strip().lower()
-        out["method"] = m if m in ("pearson", "spearman") else "pearson"
+        out["method"] = m if m in ("pearson", "spearman", "rho") else "pearson"
         try:
             out["top_n"] = int(raw.get("top_n", 25))
         except (TypeError, ValueError):
@@ -855,8 +892,9 @@ def build_registry(app) -> Dict[str, Tool]:
                       help="Source(s) to search (defaults to all loaded); "
                            ">=2 gives a cross-modality consensus."),
             ToolParam("method", "str", required=False, default="pearson",
-                      choices=("pearson", "spearman"),
-                      help="Correlation method."),
+                      choices=("pearson", "spearman", "rho"),
+                      help="Association method ('rho' = Lovell proportionality, "
+                           "robust to compositional bias on normalised data)."),
             ToolParam("top_n", "int", required=False, default=25,
                       help="How many partners to return."),
             ToolParam("min_abs", "float", required=False, default=0.3,
@@ -980,6 +1018,118 @@ def build_registry(app) -> Dict[str, Tool]:
             f"Fetched {adata.n_obs:,} cells → pseudo-bulked to {df.shape[0]} "
             f"samples; registered as platform {key!r}.",
             payload={"platform": key})
+
+    # ---- run_analysis_code (sandboxed Python) -------------------
+    def _code_resolver(app, raw):
+        out = dict(raw)
+        try:
+            out["timeout"] = float(raw.get("timeout", 20.0))
+        except (TypeError, ValueError):
+            out["timeout"] = 20.0
+        return out
+
+    def _code_exec(app, resolved, progress_cb):
+        from .code_exec import run_user_code
+        code = str(resolved.get("code") or "").strip()
+        if not code:
+            return ToolResult("Provide a Python snippet in `code`. The loaded "
+                              "platforms are available as `platforms` (a dict of "
+                              "DataFrames); assign your answer to `result`.",
+                              ok=False)
+        progress_cb(30.0, "Running analysis code (sandboxed)…")
+        res = run_user_code(code, _platforms(app),
+                            timeout=float(resolved.get("timeout", 20.0)))
+        if not res["ok"]:
+            return ToolResult(f"Code did not run: {res['error']}", ok=False,
+                              payload={"stdout": res.get("stdout", "")})
+        stdout = res.get("stdout") or ""
+        result = res.get("result")
+        parts = []
+        if stdout.strip():
+            parts.append("output:\n" + stdout.strip())
+        if result is not None and not isinstance(result, (pd.DataFrame, pd.Series)):
+            parts.append(f"result = {result!r}")
+        summary = "Code ran." + (" " + " | ".join(parts) if parts else
+                                 " (no output; assign to `result` to return a value)")
+        report_lines = ["# Analysis code result\n", "```python", code, "```"]
+        if stdout.strip():
+            report_lines += ["\n**Output:**\n```", stdout.rstrip(), "```"]
+        return ToolResult(summary[:2000], table=res.get("result_table"),
+                          report="\n".join(report_lines),
+                          payload={"stdout": stdout, "result": result})
+
+    tools["run_analysis_code"] = Tool(
+        name="run_analysis_code",
+        description="Run a short sandboxed Python snippet against the loaded "
+                    "platforms for open-ended analysis. `platforms` is a dict of "
+                    "canonical DataFrames; `pd`, `np` and the GeneVariate "
+                    "analysis functions are available; assign your answer to "
+                    "`result`. Imports, file/network access and dunder access "
+                    "are blocked.",
+        params=[
+            ToolParam("code", "str",
+                      help="Python snippet; use `platforms`, set `result`."),
+            ToolParam("timeout", "float", required=False, default=20.0,
+                      help="Wall-clock seconds before the snippet is abandoned."),
+        ],
+        resolver=_code_resolver, executor=_code_exec,
+        examples=("compute the mean of TP53 across every loaded platform",
+                  "how many genes overlap between GPL570 and GPL96",
+                  "correlate the library sizes of all samples"))
+
+    # ---- activity_inference (TF / pathway activities via decoupleR) ----
+    def _activity_resolver(app, raw):
+        out = dict(raw)
+        out["platform"] = _match_platform(app, raw.get("platform"))
+        k = str(raw.get("kind") or "tf").strip().lower()
+        out["kind"] = k if k in ("tf", "pathway") else "tf"
+        out.setdefault("organism", "human")
+        return out
+
+    def _activity_exec(app, resolved, progress_cb):
+        try:
+            from genevariate.core.analysis import run_activity
+        except Exception as exc:
+            return ToolResult(f"Activity inference unavailable: {exc}", ok=False)
+        key = resolved.get("platform")
+        plats = _platforms(app)
+        if not key or key not in plats:
+            return ToolResult("No matching platform is loaded. Load one first.",
+                              ok=False)
+        kind = str(resolved.get("kind", "tf"))
+        organism = str(resolved.get("organism", "human"))
+        progress_cb(30.0, f"Inferring {kind} activity on {key}…")
+        try:
+            res = run_activity(plats[key], kind=kind, organism=organism)
+        except RuntimeError as exc:
+            return ToolResult(str(exc), ok=False)
+        manifest = _manifest("activity_inference", resolved,
+                             inputs={"platform": plats[key]})
+        report = _append_manifest(res.get("report", ""), manifest)
+        return ToolResult(res["summary"], table=res["ranked"].head(15),
+                          report=report, manifest=manifest,
+                          payload={"activities": res["activities"],
+                                   "ranked": res["ranked"], "report": report})
+
+    tools["activity_inference"] = Tool(
+        name="activity_inference",
+        description="Infer transcription-factor (CollecTRI) or pathway "
+                    "(PROGENy) activity per sample via decoupleR — the "
+                    "mechanistic step beyond over-represented gene lists.",
+        params=[
+            ToolParam("platform", "platform", required=False,
+                      help="Platform to score (defaults to the first loaded)."),
+            ToolParam("kind", "str", required=False, default="tf",
+                      choices=("tf", "pathway"),
+                      help="'tf' for CollecTRI TF activities, 'pathway' for "
+                           "PROGENy pathway activities."),
+            ToolParam("organism", "str", required=False, default="human",
+                      help="Organism for the regulatory network."),
+        ],
+        resolver=_activity_resolver, executor=_activity_exec,
+        examples=("infer TF activity on GPL570",
+                  "run progeny pathway activity on my platform",
+                  "which transcription factors are active"))
 
     tools["fetch_single_cell"] = Tool(
         name="fetch_single_cell",
