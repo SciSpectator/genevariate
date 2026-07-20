@@ -98,6 +98,8 @@ class ChatSidebar(ttk.Frame):
                                        font=("Segoe UI", 8, "bold"))
         self._transcript.tag_configure("final", foreground=AERO["text"],
                                        font=("Segoe UI", 9, "bold"))
+        self._transcript.tag_configure("report", foreground=AERO["muted"],
+                                       font=("Consolas", 8))
 
         # confirmation card (hidden until a tool is proposed)
         self._card = ttk.LabelFrame(self, text="Confirm action")
@@ -122,6 +124,13 @@ class ChatSidebar(ttk.Frame):
         self._stop_btn = ttk.Button(entry_row, text="Stop",
                                     command=self._on_stop)
         # packed only while an agent run is in flight
+
+        # "View report" opens the latest tool's full markdown analysis in a
+        # scrollable window; hidden until a result carries a report.
+        self._last_report = ""
+        self._last_report_title = "Analysis report"
+        self._report_btn = ttk.Button(self, text="View report",
+                                      command=self._open_report_window)
 
     # -------------------------------------------------- transcript
     def _append(self, who: str, text: str, tag: str) -> None:
@@ -335,6 +344,7 @@ class ChatSidebar(ttk.Frame):
             return
         self._append("bot", result.summary, "bot")
         self._append_table(result)
+        self._offer_report(result)
 
     def _append_table(self, result) -> None:
         table = getattr(result, "table", None)
@@ -344,6 +354,44 @@ class ChatSidebar(ttk.Frame):
                 self._append("sys", preview, "sys")
             except Exception:
                 pass
+
+    def _offer_report(self, result) -> None:
+        """Surface a tool's markdown analysis: preview inline + open-in-window."""
+        report = getattr(result, "report", "") or ""
+        if not report.strip():
+            return
+        self._last_report = report
+        title = str(getattr(result, "summary", "") or "Analysis report")
+        self._last_report_title = title[:60]
+        preview = report.strip().splitlines()
+        head = "\n".join(preview[:8])
+        if len(preview) > 8:
+            head += "\n…"
+        self._append("report", head, "report")
+        try:
+            self._report_btn.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 4),
+                                  before=self._entry.master)
+        except Exception:
+            pass
+
+    def _open_report_window(self) -> None:
+        if not self._last_report.strip():
+            return
+        win = tk.Toplevel(self)
+        win.title(self._last_report_title)
+        win.geometry("640x560")
+        frame = ttk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        txt = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10),
+                      background=AERO.get("panel", "#FFFFFF"),
+                      foreground=AERO.get("text", "#0E2A45"),
+                      relief=tk.FLAT, padx=8, pady=8)
+        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=txt.yview)
+        txt.configure(yscrollcommand=vsb.set)
+        txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        txt.insert(tk.END, self._last_report)
+        txt.configure(state=tk.DISABLED)
 
     # -------------------------------------------------- agent mode
     def _run_agent_goal(self, goal: str) -> None:
@@ -473,6 +521,7 @@ class ChatSidebar(ttk.Frame):
             self._append("bot", text, "bot")
             if result is not None:
                 self._append_table(result)
+                self._offer_report(result)
         elif kind in ("tool_error", "step_error"):
             self._append("bot", f"⚠ {text}", "bot")
         elif kind == "final":

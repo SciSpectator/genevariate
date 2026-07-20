@@ -38,6 +38,36 @@ def test_default_model_follows_backend(monkeypatch):
     assert la._default_model() == "qwen2.5:7b"
 
 
+def test_resolve_ollama_model_appends_quant(monkeypatch):
+    monkeypatch.delenv("GENEVARIATE_AGENT_QUANT", raising=False)
+    # no quant env -> tag unchanged
+    assert la._resolve_ollama_model("qwen2.5:7b") == "qwen2.5:7b"
+    monkeypatch.setenv("GENEVARIATE_AGENT_QUANT", "q5_K_M")
+    assert la._resolve_ollama_model("qwen2.5:7b") == "qwen2.5:7b-q5_K_M"
+    # a tag that already pins a quant is left alone
+    assert (la._resolve_ollama_model("qwen2.5:7b-instruct-q4_K_M")
+            == "qwen2.5:7b-instruct-q4_K_M")
+    # bare name (no colon) is left alone
+    assert la._resolve_ollama_model("qwen2.5") == "qwen2.5"
+
+
+def test_ollama_options_are_env_overridable(monkeypatch):
+    monkeypatch.delenv("GENEVARIATE_AGENT_KEEP_ALIVE", raising=False)
+    monkeypatch.delenv("GENEVARIATE_AGENT_NUM_CTX", raising=False)
+    monkeypatch.delenv("GENEVARIATE_AGENT_NUM_PREDICT", raising=False)
+    opts = la._ollama_options()
+    assert opts["temperature"] == 0
+    assert opts["keep_alive"] == "30m"
+    assert opts["num_ctx"] == 8192 and opts["num_predict"] == 1024
+    monkeypatch.setenv("GENEVARIATE_AGENT_KEEP_ALIVE", "1h")
+    monkeypatch.setenv("GENEVARIATE_AGENT_NUM_CTX", "4096")
+    monkeypatch.setenv("GENEVARIATE_AGENT_NUM_PREDICT", "bad")
+    opts = la._ollama_options()
+    assert opts["keep_alive"] == "1h" and opts["num_ctx"] == 4096
+    # non-int falls back to the default
+    assert opts["num_predict"] == 1024
+
+
 def test_agent_unavailable_without_langchain(monkeypatch):
     monkeypatch.setattr(la, "_HAS_LANGCHAIN", False)
     assert la.agent_available() is False

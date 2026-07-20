@@ -147,9 +147,19 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
   sidebar (Stop cancels). Override the model with `GENEVARIATE_AGENT_MODEL`. If a hosted key is
   declined it drops to the local model; if that's unavailable it falls back to a deterministic
   heuristic planner, then keyword routing — the app works either way.
-- Tools: `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
-  `compare_gene`, `condition_enrichment`, `variability_enrichment`, `rank_genes`,
-  `run_ngs_de`. Each calls the existing analysis API rather than reimplementing it.
+- **Optimized local inference (quantization):** the local model runs as a **quantized GGUF**
+  through Ollama/llama.cpp so a 7B fits ~8 GB VRAM at roughly double the fp16 throughput.
+  Pick the GGUF level with `GENEVARIATE_AGENT_QUANT` (`q4_K_M` default → `q5_K_M` → `q8_0`;
+  AWQ/GPTQ tags also work if your Ollama build serves them). The model is held resident
+  between turns (`GENEVARIATE_AGENT_KEEP_ALIVE`, default `30m`) so you pay the load cost once,
+  and `GENEVARIATE_AGENT_NUM_CTX` / `GENEVARIATE_AGENT_NUM_PREDICT` tune context/output length.
+  Groq is a hosted LPU service and is already optimally served, so no client-side tuning applies.
+- Tools (each calls the existing analysis API rather than reimplementing it, and returns a
+  markdown **description + analysis** you can open in a scrollable *View report* window):
+  `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
+  `compare_gene`, `classify_distributions` (modality landscape), `condition_enrichment`,
+  `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
+  Stouffer + GSEA), `rank_genes`, `run_ngs_de`.
 - Tk-free core in `core/chatbot/` (`build_registry`, `route`, `run_agent`, `agent_available`).
 - Optional extra (pre-provision; otherwise auto-installed on first use):
   `pip install genevariate[agent]` (`langchain` + `langchain-groq` + `langchain-ollama`).

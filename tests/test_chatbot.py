@@ -44,7 +44,9 @@ def _ollama_off(monkeypatch):
 def test_registry_has_core_tools():
     reg = build_registry(FakeApp())
     for name in ("list_platforms", "condition_enrichment",
-                 "variability_enrichment", "rank_genes", "run_ngs_de"):
+                 "variability_enrichment", "rank_genes", "run_ngs_de",
+                 "classify_distributions", "meta_enrichment",
+                 "gene_distribution", "compare_gene"):
         assert name in reg
 
 
@@ -116,3 +118,29 @@ def test_condition_executor_runs():
     assert result.ok
     assert "ranked" in result.payload
     assert not result.payload["ranked"].empty
+    # condition tool now carries a markdown description/analysis
+    assert result.report
+
+
+def test_classify_distributions_tool_runs():
+    """Modality-landscape tool: excludes Classified_* cols and reports."""
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["classify_distributions"]
+    resolved = tool.coerce(tool.resolver(app, {"platform": "GPLX"}))
+    result = tool.executor(app, resolved, lambda v, t: None)
+    assert result.ok
+    tags = result.payload["tags"]
+    # only the five gene columns are classified, not the metadata columns
+    assert set(tags.index) == {f"G{i}" for i in range(5)}
+    assert result.report
+
+
+def test_gene_distribution_tool_reports():
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["gene_distribution"]
+    resolved = tool.coerce(tool.resolver(app, {"gene": "G0", "platform": "GPLX"}))
+    result = tool.executor(app, resolved, lambda v, t: None)
+    assert result.ok
+    assert "G0" in result.report

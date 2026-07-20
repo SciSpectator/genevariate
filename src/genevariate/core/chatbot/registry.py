@@ -185,6 +185,7 @@ def build_registry(app) -> Dict[str, Tool]:
 
     # ---- condition_enrichment -----------------------------------
     def _cond_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import enrichment_report_markdown
         df, labels = _prep_labels(app, resolved)
         case = str(resolved.get("case_label"))
         control = str(resolved.get("control_label"))
@@ -197,13 +198,22 @@ def build_registry(app) -> Dict[str, Tool]:
         gsea = run_prerank_gsea(ranked, gene_sets=libs)
         top = gsea.head(15) if gsea is not None and not gsea.empty else ranked.head(15)
         n = 0 if gsea is None else len(gsea)
+        comparison = f"{case} vs {control} on {resolved.get('platform')}"
+        try:
+            report = enrichment_report_markdown(None, gsea, comparison)
+        except Exception:
+            report = ""
         return ToolResult(
             f"Condition enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, payload={"ranked": ranked, "gsea": gsea})
+            table=top, report=report,
+            payload={"ranked": ranked, "gsea": gsea, "report": report})
 
     # ---- variability_enrichment ---------------------------------
     def _var_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import (
+            variability_report_markdown, VARIABILITY_DEFAULT_METHOD,
+        )
         df, labels = _prep_labels(app, resolved)
         case = str(resolved.get("case_label"))
         control = str(resolved.get("control_label"))
@@ -219,10 +229,17 @@ def build_registry(app) -> Dict[str, Tool]:
         gsea = run_variability_gsea(ranked, gene_sets=libs)
         top = gsea.head(15) if gsea is not None and not gsea.empty else ranked.head(15)
         n = 0 if gsea is None else len(gsea)
+        comparison = f"{case} vs {control} on {resolved.get('platform')}"
+        try:
+            report = variability_report_markdown(
+                ranked, gsea, comparison, method or VARIABILITY_DEFAULT_METHOD)
+        except Exception:
+            report = ""
         return ToolResult(
             f"Variability enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, payload={"ranked": ranked, "gsea": gsea})
+            table=top, report=report,
+            payload={"ranked": ranked, "gsea": gsea, "report": report})
 
     # ---- rank_genes (no GSEA) -----------------------------------
     def _rank_exec(app, resolved, progress_cb):
@@ -280,6 +297,133 @@ def build_registry(app) -> Dict[str, Tool]:
             table=(gsea.head(15) if gsea is not None and not gsea.empty
                    else ranked.head(15)),
             payload={"deseq": res, "ranked": ranked, "gsea": gsea})
+
+    # ---- classify_distributions (modality landscape) ------------
+    def _modality_resolver(app, raw):
+        out = dict(raw)
+        out["platform"] = _match_platform(app, raw.get("platform"))
+        return out
+
+    def _modality_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import (
+            classify_distributions, distribution_summary,
+        )
+        key = resolved.get("platform")
+        plats = _platforms(app)
+        if not key or key not in plats:
+            return ToolResult("No matching platform is loaded. Load one first.",
+                              ok=False)
+        df = plats[key]
+        # classify_distributions treats every non-GSM/series_id column as a
+        # gene, so drop the Classified_* metadata columns first.
+        drop = _classified_cols(df)
+        expr_df = df.drop(columns=drop) if drop else df
+        progress_cb(30.0, f"Classifying gene distributions on {key}…")
+        tags = classify_distributions(expr_df)
+        if tags is None or tags.empty:
+            return ToolResult(f"No gene columns to classify on {key!r}.", ok=False)
+        summary = distribution_summary(tags)
+        progress_cb(80.0, "Summarising modality landscape…")
+        n_genes = int(len(tags))
+        top = summary.sort_values("n_genes", ascending=False)
+        parts = [f"{r['distribution']} {r['fraction'] * 100:.1f}%"
+                 for _, r in top.head(4).iterrows()]
+        lines = [f"# Distribution landscape — {key}\n",
+                 f"Classified **{n_genes:,}** gene(s) into "
+                 f"{len(summary)} modality class(es).\n"]
+        for _, r in top.iterrows():
+            lines.append(f"- **{r['distribution']}**: {int(r['n_genes']):,} genes "
+                         f"({r['fraction'] * 100:.1f}%)")
+        report = "\n".join(lines)
+        return ToolResult(
+            f"Modality landscape on {key}: {n_genes:,} genes — "
+            + ", ".join(parts) + ".",
+            table=top, report=report,
+            payload={"platform": key, "tags": tags, "summary": summary,
+                     "report": report})
+
+    # ---- meta_enrichment (cross-platform consensus) -------------
+    def _meta_resolver(app, raw):
+        out = dict(raw)
+        plats_arg = raw.get("platforms")
+        if isinstance(plats_arg, str):
+            plats_arg = [s.strip() for s in plats_arg.replace(";", ",").split(",")
+                         if s.strip()]
+        if plats_arg:
+            resolved = [_match_platform(app, p) for p in plats_arg]
+            out["platforms"] = [p for p in dict.fromkeys(resolved) if p]
+        else:
+            out["platforms"] = list(_platforms(app).keys())
+        out.setdefault("libraries", libs_default)
+        m = str(raw.get("method") or "rank_product").strip().lower()
+        out["method"] = m if m in ("rank_product", "stouffer") else "rank_product"
+        return out
+
+    def _meta_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import (
+            combine_ranks, run_meta_enrichment_gsea,
+            meta_enrichment_report_markdown,
+        )
+        keys = resolved.get("platforms") or []
+        if len(keys) < 2:
+            return ToolResult("Meta-enrichment needs at least two platforms. "
+                              "Load or fetch them first.", ok=False)
+        case = resolved.get("case_label")
+        control = resolved.get("control_label")
+        method = resolved.get("method", "rank_product")
+        libs = [s.strip() for s in str(resolved.get("libraries", libs_default)).split(",")
+                if s.strip()]
+        per_platform: Dict[str, pd.DataFrame] = {}
+        used: List[str] = []
+        for i, key in enumerate(keys):
+            progress_cb(10.0 + 50.0 * i / max(len(keys), 1),
+                        f"Ranking {key}…")
+            try:
+                df, labels = _prep_labels(app, {
+                    "platform": key,
+                    "condition_column": resolved.get("condition_column"),
+                })
+                col = _pick_condition_column(_platforms(app)[key],
+                                             resolved.get("condition_column"))
+                c_case, c_control = case, control
+                if not (c_case and c_control):
+                    c_case, c_control = _default_case_control(
+                        _platforms(app)[key], col)
+                ranked = rank_genes_by_condition(df, labels, str(c_case),
+                                                 str(c_control))
+                per_platform[key] = ranked
+                used.append(key)
+            except Exception:
+                continue
+        if len(per_platform) < 2:
+            return ToolResult(
+                "Could not rank at least two platforms for meta-enrichment "
+                "(need a shared Classified_* condition column on each).",
+                ok=False)
+        progress_cb(65.0, f"Combining ranks ({method})…")
+        combined = combine_ranks(per_platform, method=method)
+        gsea = None
+        try:
+            progress_cb(80.0, "Running consensus GSEA…")
+            gsea = run_meta_enrichment_gsea(combined, gene_sets=libs)
+        except Exception:
+            gsea = None
+        comparison = (f"{case} vs {control}" if case and control
+                      else "case vs control")
+        try:
+            report = meta_enrichment_report_markdown(
+                combined, gsea, used, comparison, method)
+        except Exception:
+            report = ""
+        n = 0 if gsea is None else len(gsea)
+        top = (gsea.head(15) if gsea is not None and not gsea.empty
+               else combined.head(15))
+        return ToolResult(
+            f"Cross-platform meta-enrichment ({method}) over {len(used)} "
+            f"platform(s): {n} consensus term(s).",
+            table=top, report=report,
+            payload={"combined": combined, "gsea": gsea,
+                     "platforms": used, "report": report})
 
     tools: Dict[str, Tool] = {}
 
@@ -351,6 +495,45 @@ def build_registry(app) -> Dict[str, Tool]:
                   "ngs differential expression from h5ad",
                   "raw count rna-seq de"))
 
+    tools["classify_distributions"] = Tool(
+        name="classify_distributions",
+        description="Classify every gene on a platform by its expression "
+                    "distribution (unimodal/bimodal/heavy-tailed) and summarise "
+                    "the modality landscape.",
+        params=[
+            ToolParam("platform", "platform", required=False,
+                      help="Platform to profile (defaults to the first loaded)."),
+        ],
+        resolver=_modality_resolver, executor=_modality_exec,
+        examples=("classify the gene distributions on GPL570",
+                  "show the modality landscape of my platform",
+                  "how many genes are bimodal"))
+
+    tools["meta_enrichment"] = Tool(
+        name="meta_enrichment",
+        description="Cross-platform consensus enrichment: rank each platform "
+                    "case-vs-control, combine the rankings (rank-product or "
+                    "Stouffer), then run GSEA on the consensus.",
+        params=[
+            ToolParam("platforms", "list", required=False,
+                      help="Platforms to combine (defaults to all loaded)."),
+            ToolParam("condition_column", "str", required=False,
+                      help="Classified_* column shared across platforms."),
+            ToolParam("case_label", "str", required=False,
+                      help="Group treated as 'case'."),
+            ToolParam("control_label", "str", required=False,
+                      help="Group treated as 'control'."),
+            ToolParam("method", "str", required=False, default="rank_product",
+                      choices=("rank_product", "stouffer"),
+                      help="Rank-combination method."),
+            ToolParam("libraries", "str", required=False, default=libs_default,
+                      help="Comma-separated Enrichr gene-set libraries."),
+        ],
+        resolver=_meta_resolver, executor=_meta_exec,
+        examples=("run meta enrichment across GPL570 and GPL96 tumor vs normal",
+                  "cross-platform consensus enrichment case vs control",
+                  "combine rankings across platforms and run gsea"))
+
     # ---- gene_distribution --------------------------------------
     def _dist_resolver(app, raw):
         out = dict(raw)
@@ -377,9 +560,21 @@ def build_registry(app) -> Dict[str, Tool]:
                 f"(n={stats.get('n', 0)}, mean={stats.get('mean', float('nan')):.3g}, "
                 f"median={stats.get('median', float('nan')):.3g}, "
                 f"std={stats.get('std', float('nan')):.3g}).")
-        return ToolResult(summ, table=tbl,
+        cv = (stats.get("std", 0.0) / stats.get("mean", 1.0)
+              if stats.get("mean") else float("nan"))
+        report = (f"# {gene} distribution — {key}\n\n"
+                  f"- **Class**: {stats.get('distribution', '?')}\n"
+                  f"- **Samples**: {stats.get('n', 0):,}\n"
+                  f"- **Mean / median**: {stats.get('mean', float('nan')):.3g} / "
+                  f"{stats.get('median', float('nan')):.3g}\n"
+                  f"- **Std (CV)**: {stats.get('std', float('nan')):.3g} "
+                  f"({cv:.2f})\n"
+                  f"- **Range**: {stats.get('min', float('nan')):.3g} – "
+                  f"{stats.get('max', float('nan')):.3g}\n")
+        return ToolResult(summ, table=tbl, report=report,
                           payload={"gene": gene, "platform": key,
-                                   "values": vec, "stats": stats})
+                                   "values": vec, "stats": stats,
+                                   "report": report})
 
     tools["gene_distribution"] = Tool(
         name="gene_distribution",
@@ -443,9 +638,22 @@ def build_registry(app) -> Dict[str, Tool]:
                       f" — {'differ' if p < 0.05 else 'no significant difference'}.")
         summ = (f"Compared {gene} across {len(usable)} source(s): "
                 + ", ".join(usable) + "." + ks_txt)
-        return ToolResult(summ, table=table,
+        rlines = [f"# {gene} across sources\n"]
+        for r in rows:
+            if r.get("n"):
+                rlines.append(
+                    f"- **{r['source']}**: {r.get('distribution', '?')}, "
+                    f"mean={r.get('mean', float('nan')):.3g}, "
+                    f"median={r.get('median', float('nan')):.3g}, "
+                    f"n={r.get('n', 0):,}")
+            else:
+                rlines.append(f"- **{r['source']}**: {r.get('note', 'no data')}")
+        if ks_txt:
+            rlines.append("\n**Two-sample test:**" + ks_txt)
+        report = "\n".join(rlines)
+        return ToolResult(summ, table=table, report=report,
                           payload={"gene": gene, "sources": usable,
-                                   "vectors": vecs})
+                                   "vectors": vecs, "report": report})
 
     tools["compare_gene"] = Tool(
         name="compare_gene",

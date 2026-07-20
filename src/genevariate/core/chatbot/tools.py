@@ -46,6 +46,7 @@ class ToolResult:
     table: Any = None          # optional pandas.DataFrame preview
     payload: Dict[str, Any] = field(default_factory=dict)
     ok: bool = True
+    report: str = ""           # optional markdown description/analysis
 
 
 @dataclass

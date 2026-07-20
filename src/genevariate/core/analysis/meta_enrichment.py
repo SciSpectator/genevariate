@@ -223,7 +223,7 @@ def meta_enrichment_report_markdown(combined: pd.DataFrame,
         lines.append("")
 
     lines.append("## Pathways (meta-GSEA)")
-    if gsea is None or gsea.empty:
+    if gsea is None or gsea.empty or "NES" not in gsea.columns:
         lines.append("_No results._\n")
     else:
         cols = [c for c in ("library", "Term", "NES", "FDR q-val", "NOM p-val",
