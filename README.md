@@ -202,6 +202,11 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 
 - Resource-aware worker scaling (1–210 threads) driven by live CPU/RAM/VRAM/thermal metrics
 - GPU auto-detection (NVIDIA / AMD) with automatic CPU fallback
+- Lazy, pay-for-what-you-use imports: `core/analysis` loads each submodule (and its heavy
+  optional deps) only on first access via PEP 562 `__getattr__`, so the tensor stack
+  (`torch` via `pydeseq2`) and `decoupler` are pulled into memory only when DESeq2 or
+  activity inference is actually run — importing the analysis package no longer drags the
+  GPU/tensor stack in at startup (base import ≈4× faster, no CUDA init for light paths)
 - Low-RAM mode: GEOmetadb queried directly from disk (WAL + indexes + mmap), no OOM
 - Docker image with bundled Ollama and automatic model pulling
 

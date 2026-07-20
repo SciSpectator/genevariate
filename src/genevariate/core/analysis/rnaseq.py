@@ -22,19 +22,16 @@ samples x genes, so `run_deseq2` transposes internally.
 """
 from __future__ import annotations
 
+from importlib.util import find_spec
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
-try:  # pydeseq2 is optional (rnaseq extra). Import-guard like enrichment.gseapy.
-    from pydeseq2.dds import DeseqDataSet
-    from pydeseq2.ds import DeseqStats
-    _HAS_PYDESEQ2 = True
-except Exception:  # pragma: no cover - exercised only when dep absent
-    DeseqDataSet = None
-    DeseqStats = None
-    _HAS_PYDESEQ2 = False
+# pydeseq2 is optional (rnaseq extra) and pulls in torch/anndata, so we only
+# probe for it here and import it lazily inside run_deseq2 — QC, CPM and the
+# median-of-ratios size factors are pure numpy and must stay lightweight.
+_HAS_PYDESEQ2 = find_spec("pydeseq2") is not None
 
 
 DEFAULT_MITO_PREFIXES: Tuple[str, ...] = ("MT-", "mt-", "Mt-")
@@ -158,6 +155,8 @@ def run_deseq2(counts: pd.DataFrame,
             "pydeseq2 is not installed. `pip install genevariate[rnaseq]` "
             "(or `pip install pydeseq2`) to run DESeq2 differential expression."
         )
+    from pydeseq2.dds import DeseqDataSet
+    from pydeseq2.ds import DeseqStats
     factor, test_level, ref_level = contrast
 
     # Align samples between counts and design.

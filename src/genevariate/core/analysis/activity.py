@@ -17,28 +17,31 @@ column, optional ``Classified_*`` metadata, remaining columns numeric genes).
 """
 from __future__ import annotations
 
+from importlib.util import find_spec
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-try:
-    import decoupler as _dc
-    _HAS_DECOUPLER = True
-except Exception:  # pragma: no cover - exercised only when dep absent
-    _dc = None
-    _HAS_DECOUPLER = False
+# decoupler is optional and heavy; probe for it here and import it lazily in
+# _require_decoupler so importing this module stays cheap.
+_dc = None
+_HAS_DECOUPLER = find_spec("decoupler") is not None
 
 
 _META_PREFIXES = ("GSM", "series_id")
 
 
 def _require_decoupler() -> None:
+    global _dc
     if not _HAS_DECOUPLER:
         raise RuntimeError(
             "decoupler is not installed. `pip install decoupler` to run "
             "activity inference (TF activities via CollecTRI, pathway "
             "activities via PROGENy).")
+    if _dc is None:
+        import decoupler as _dc_mod
+        _dc = _dc_mod
 
 
 def _expr_matrix(df: pd.DataFrame) -> pd.DataFrame:
