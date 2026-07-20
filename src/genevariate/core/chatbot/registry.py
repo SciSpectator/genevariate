@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from .tools import Tool, ToolParam, ToolResult
@@ -63,6 +64,48 @@ def _pick_condition_column(df: pd.DataFrame, requested: Optional[str]) -> Option
 def _labels_from_column(df: pd.DataFrame, column: str) -> Dict[str, str]:
     gsm = df["GSM"].astype(str).str.upper()
     return dict(zip(gsm.values, df[column].astype(str).values))
+
+
+_META_PREFIXES = ("GSM", "series_id")
+
+
+def _find_gene_column(df: pd.DataFrame, gene: str) -> Optional[str]:
+    """Case-insensitive match of a gene symbol to a platform gene column."""
+    if not gene:
+        return None
+    g = str(gene).strip().upper()
+    meta = {c for c in df.columns
+            if c in _META_PREFIXES or str(c).startswith("Classified_")}
+    for c in df.columns:
+        if c in meta:
+            continue
+        if str(c).upper() == g:
+            return c
+    return None
+
+
+def _gene_vector(df: pd.DataFrame, gene: str) -> Optional[np.ndarray]:
+    col = _find_gene_column(df, gene)
+    if col is None:
+        return None
+    return pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+
+
+def _gene_stats(values: np.ndarray) -> Dict[str, float]:
+    from genevariate.core.analysis.bimodality import classify_gene_distribution
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"n": 0}
+    return {
+        "n": int(v.size),
+        "mean": float(np.mean(v)),
+        "median": float(np.median(v)),
+        "std": float(np.std(v, ddof=1)) if v.size > 1 else 0.0,
+        "min": float(np.min(v)),
+        "max": float(np.max(v)),
+        "distribution": classify_gene_distribution(v),
+    }
 
 
 def _default_case_control(df: pd.DataFrame, column: str) -> Tuple[str, str]:
@@ -307,5 +350,250 @@ def build_registry(app) -> Dict[str, Tool]:
         examples=("run deseq2 on counts.csv treated vs control",
                   "ngs differential expression from h5ad",
                   "raw count rna-seq de"))
+
+    # ---- gene_distribution --------------------------------------
+    def _dist_resolver(app, raw):
+        out = dict(raw)
+        out["platform"] = _match_platform(app, raw.get("platform"))
+        return out
+
+    def _dist_exec(app, resolved, progress_cb):
+        gene = str(resolved.get("gene") or "").strip()
+        if not gene:
+            return ToolResult("Which gene? Provide a gene symbol.", ok=False)
+        key = resolved.get("platform")
+        plats = _platforms(app)
+        if not key or key not in plats:
+            return ToolResult("No matching platform is loaded. Load one first "
+                              "(load_geo_platform / fetch_single_cell).", ok=False)
+        progress_cb(40.0, f"Profiling {gene} on {key}…")
+        vec = _gene_vector(plats[key], gene)
+        if vec is None:
+            return ToolResult(f"Gene {gene!r} not found on platform {key!r}.",
+                              ok=False)
+        stats = _gene_stats(vec)
+        tbl = pd.DataFrame([{"platform": key, "gene": gene, **stats}])
+        summ = (f"{gene} on {key}: {stats.get('distribution', '?')} "
+                f"(n={stats.get('n', 0)}, mean={stats.get('mean', float('nan')):.3g}, "
+                f"median={stats.get('median', float('nan')):.3g}, "
+                f"std={stats.get('std', float('nan')):.3g}).")
+        return ToolResult(summ, table=tbl,
+                          payload={"gene": gene, "platform": key,
+                                   "values": vec, "stats": stats})
+
+    tools["gene_distribution"] = Tool(
+        name="gene_distribution",
+        description="Profile one gene's distribution on a platform "
+                    "(class + mean/median/std/modality).",
+        params=[
+            ToolParam("gene", "str", help="Gene symbol, e.g. TP53."),
+            ToolParam("platform", "platform", required=False,
+                      help="Platform to profile (defaults to the first loaded)."),
+        ],
+        resolver=_dist_resolver, executor=_dist_exec,
+        examples=("analyze the distribution of TP53",
+                  "distribution of gene BRCA1 on GPL570",
+                  "profile EGFR expression"))
+
+    # ---- compare_gene -------------------------------------------
+    def _cmp_resolver(app, raw):
+        out = dict(raw)
+        plats_arg = raw.get("platforms")
+        if isinstance(plats_arg, str):
+            plats_arg = [s.strip() for s in plats_arg.replace(";", ",").split(",")
+                         if s.strip()]
+        if plats_arg:
+            resolved = [_match_platform(app, p) for p in plats_arg]
+            out["platforms"] = [p for p in dict.fromkeys(resolved) if p]
+        else:
+            out["platforms"] = list(_platforms(app).keys())
+        return out
+
+    def _cmp_exec(app, resolved, progress_cb):
+        from scipy.stats import ks_2samp
+        gene = str(resolved.get("gene") or "").strip()
+        keys = resolved.get("platforms") or []
+        if not gene:
+            return ToolResult("Which gene should I compare?", ok=False)
+        if len(keys) < 2:
+            return ToolResult("Need at least two platforms/sources to compare. "
+                              "Load or fetch them first.", ok=False)
+        plats = _platforms(app)
+        rows, vecs = [], {}
+        for i, key in enumerate(keys):
+            progress_cb(20.0 + 60.0 * i / max(len(keys), 1),
+                        f"Extracting {gene} from {key}…")
+            if key not in plats:
+                continue
+            vec = _gene_vector(plats[key], gene)
+            if vec is None:
+                rows.append({"source": key, "gene": gene, "n": 0,
+                             "note": "gene not found"})
+                continue
+            vecs[key] = vec[np.isfinite(vec)]
+            rows.append({"source": key, "gene": gene, **_gene_stats(vec)})
+        table = pd.DataFrame(rows)
+        # pairwise KS test between the first two usable sources
+        ks_txt = ""
+        usable = [k for k in keys if k in vecs and vecs[k].size > 1]
+        if len(usable) >= 2:
+            a, b = usable[0], usable[1]
+            stat, p = ks_2samp(vecs[a], vecs[b])
+            ks_txt = (f" KS({a} vs {b}) D={stat:.3f}, p={p:.3g}"
+                      f" — {'differ' if p < 0.05 else 'no significant difference'}.")
+        summ = (f"Compared {gene} across {len(usable)} source(s): "
+                + ", ".join(usable) + "." + ks_txt)
+        return ToolResult(summ, table=table,
+                          payload={"gene": gene, "sources": usable,
+                                   "vectors": vecs})
+
+    tools["compare_gene"] = Tool(
+        name="compare_gene",
+        description="Compare one gene's distribution across two or more "
+                    "platforms/sources (stats + KS test).",
+        params=[
+            ToolParam("gene", "str", help="Gene symbol to compare."),
+            ToolParam("platforms", "list", required=False,
+                      help="Platforms/sources to compare (defaults to all loaded)."),
+        ],
+        resolver=_cmp_resolver, executor=_cmp_exec,
+        examples=("compare TP53 across single cell and GEO",
+                  "compare distribution of BRCA1 between GPL570 and GPL96",
+                  "how does EGFR differ across platforms"))
+
+    # ---- load_geo_platform (headless, no dialogs) ---------------
+    def _load_resolver(app, raw):
+        return dict(raw)
+
+    def _load_exec(app, resolved, progress_cb):
+        name = str(resolved.get("platform") or "").strip()
+        if not name:
+            return ToolResult("Which platform (e.g. GPL570)?", ok=False)
+        key_up = name.upper()
+        if key_up in _platforms(app):
+            df = _platforms(app)[key_up]
+            return ToolResult(f"{key_up} already loaded ({df.shape[0]} samples).",
+                              payload={"platform": key_up})
+        progress_cb(20.0, f"Locating {key_up}…")
+        try:
+            available = app._discover_available_platforms()
+        except Exception:
+            available = {}
+        path = available.get(key_up) or available.get(name)
+        if not path:
+            return ToolResult(
+                f"No local file found for {key_up}. Download it via the GPL "
+                "downloader, or place its CSV in the data directory.", ok=False)
+        progress_cb(50.0, f"Reading {key_up}…")
+        comp = "gzip" if str(path).endswith(".gz") else "infer"
+        df = pd.read_csv(path, compression=comp, low_memory=False)
+        # canonicalise: ensure a GSM column
+        if "GSM" not in df.columns:
+            gsm_col = next((c for c in df.columns
+                            if str(c).strip().upper() in ("GSM", "SAMPLE", "SAMPLES")),
+                           None)
+            if gsm_col is None and df.shape[1]:
+                gsm_col = df.columns[0]
+            df = df.rename(columns={gsm_col: "GSM"})
+        df["GSM"] = df["GSM"].astype(str)
+        app.gpl_datasets[key_up] = df
+        try:
+            app.after(0, app._update_platform_status)
+        except Exception:
+            pass
+        return ToolResult(f"Loaded {key_up}: {df.shape[0]} samples × "
+                          f"{df.shape[1] - 1} columns.",
+                          payload={"platform": key_up})
+
+    tools["load_geo_platform"] = Tool(
+        name="load_geo_platform",
+        description="Load a locally-available GEO/GPL microarray platform "
+                    "into memory so it can be analysed.",
+        params=[ToolParam("platform", "str", help="Platform id, e.g. GPL570.")],
+        resolver=_load_resolver, executor=_load_exec,
+        examples=("load GPL570", "load the GEO platform GPL96",
+                  "bring in microarray platform GPL10558"))
+
+    # ---- fetch_single_cell (CELLxGENE census -> pseudobulk) -----
+    def _sc_resolver(app, raw):
+        out = dict(raw)
+        out.setdefault("organism", "homo_sapiens")
+        out.setdefault("max_cells", 20000)
+        out.setdefault("name", "scRNA")
+        return out
+
+    def _sc_exec(app, resolved, progress_cb):
+        try:
+            from genevariate.sources.cellxgene import CensusClient
+            from genevariate.utils.pseudobulk import (
+                pseudobulk, pseudobulk_to_platform_df,
+            )
+        except Exception as exc:
+            return ToolResult(
+                "Single-cell fetch needs the CELLxGENE extra "
+                f"(cellxgene_census + anndata): {exc}", ok=False)
+        gene = str(resolved.get("gene") or "").strip()
+        tissue = resolved.get("tissue") or None
+        organism = resolved.get("organism", "homo_sapiens")
+        try:
+            max_cells = int(resolved.get("max_cells", 20000))
+        except (TypeError, ValueError):
+            max_cells = 20000
+        progress_cb(15.0, "Querying CELLxGENE Census…")
+        client = CensusClient()
+        try:
+            adata = client.fetch(
+                organism=organism,
+                genes=[gene] if gene else None,
+                tissue=tissue,
+                max_cells=max_cells,
+                progress_callback=lambda m: progress_cb(35.0, str(m)),
+            )
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+        progress_cb(70.0, "Pseudo-bulking cells…")
+        groupby = [c for c in ("tissue", "cell_type") if c in adata.obs.columns]
+        if not groupby:
+            groupby = list(adata.obs.columns[:1])
+        pb = pseudobulk(adata, groupby=tuple(groupby), min_cells=5)
+        df = pseudobulk_to_platform_df(pb)
+        if "GSM" not in df.columns:
+            df = df.reset_index().rename(columns={df.columns[0]: "GSM"})
+            df["GSM"] = df["GSM"].astype(str)
+        name = str(resolved.get("name") or "scRNA")
+        key = name if name not in _platforms(app) else f"{name}_{len(_platforms(app))}"
+        app.gpl_datasets[key] = df
+        try:
+            app.after(0, app._update_platform_status)
+        except Exception:
+            pass
+        return ToolResult(
+            f"Fetched {adata.n_obs:,} cells → pseudo-bulked to {df.shape[0]} "
+            f"samples; registered as platform {key!r}.",
+            payload={"platform": key})
+
+    tools["fetch_single_cell"] = Tool(
+        name="fetch_single_cell",
+        description="Fetch single-cell RNA-seq from the CELLxGENE Census, "
+                    "pseudo-bulk it, and register it as a platform.",
+        params=[
+            ToolParam("gene", "str", required=False,
+                      help="Restrict fetch to this gene (optional)."),
+            ToolParam("tissue", "str", required=False,
+                      help="Tissue filter, e.g. lung."),
+            ToolParam("organism", "str", required=False, default="homo_sapiens",
+                      help="Census organism."),
+            ToolParam("max_cells", "int", required=False, default=20000,
+                      help="Cap on cells fetched."),
+            ToolParam("name", "str", required=False, default="scRNA",
+                      help="Platform name to register under."),
+        ],
+        resolver=_sc_resolver, executor=_sc_exec,
+        examples=("fetch single cell data for TP53 in lung",
+                  "get scRNA-seq from cellxgene for brain",
+                  "pull single-cell data for EGFR"))
 
     return tools
