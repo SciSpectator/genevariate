@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -238,6 +239,36 @@ def _observation(result: ToolResult) -> str:
     if not result.ok:
         lines.append("(this step did not succeed — adjust and try another tool)")
     return "\n".join(lines)
+
+
+# Llama-3.x sometimes emits a tool call in its *native* text format
+# (``<function=name>{json}</function>`` or ``<function/name>{json}</function>``,
+# occasionally wrapped in a ``<|python_tag|>``) inside the assistant content
+# instead of routing it through the structured tool-calls API. Groq/LangChain
+# then hand it back as a plain final answer and the tool never runs — most often
+# for the tool with the most parameters. We detect and execute that leaked call
+# so the reasoning loop still produces a real result.
+_LEAKED_TOOL_RE = re.compile(
+    r"<function[/=]\s*([A-Za-z0-9_]+)\s*>\s*(\{.*?\})\s*</function>",
+    re.DOTALL,
+)
+
+
+def _find_leaked_tool_call(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Return ``(tool_name, params)`` if ``text`` is a leaked native tool call."""
+    if not text or "<function" not in text:
+        return None
+    m = _LEAKED_TOOL_RE.search(text)
+    if not m:
+        return None
+    name = m.group(1)
+    try:
+        params = json.loads(m.group(2))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(params, dict):
+        return None
+    return name, params
 
 
 def build_langchain_tools(
@@ -606,6 +637,24 @@ def run_agent(
         return reply
 
     reply.results = sink["results"]
+
+    # Recover a tool call the model leaked as text instead of calling properly.
+    leaked = _find_leaked_tool_call(final_text)
+    if leaked and leaked[0] in registry:
+        name, params = leaked
+        tool = registry[name]
+        raw = {k: v for k, v in params.items() if v not in (None, "")}
+        on_event("tool_start", f"{name}({raw})", None)
+        try:
+            resolved = tool.coerce(tool.resolver(app, raw))
+            result = tool.executor(app, resolved, progress_cb or (lambda v, t: None))
+            reply.results.append(result)
+            on_event("tool_result", result.summary, result)
+            final_text = _observation(result)
+        except Exception as exc:
+            on_event("tool_error", f"{name} failed: {exc}", None)
+            final_text = f"ERROR from {name}: {exc}"
+
     if not final_text:
         oks = [r for r in reply.results if r.ok]
         final_text = (oks[-1].summary if oks else

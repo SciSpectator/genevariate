@@ -206,6 +206,26 @@ def test_planner_reads_gene_not_verb():
         assert s.params.get("gene") in (None, "TP53")
 
 
+def test_find_leaked_tool_call_parses_llama_native_format():
+    """Llama sometimes writes a tool call as text; we must recover it."""
+    from genevariate.core.chatbot.langchain_agent import _find_leaked_tool_call
+    # both '/' and '=' separators, with surrounding prose
+    a = _find_leaked_tool_call(
+        'Sure. <function/run_ngs_de>{"counts_path": "/tmp/c.csv", '
+        '"case_label": "treated", "control_label": "control"}</function>')
+    assert a is not None
+    name, params = a
+    assert name == "run_ngs_de"
+    assert params["counts_path"] == "/tmp/c.csv"
+    b = _find_leaked_tool_call(
+        '<function=list_platforms>{}</function>')
+    assert b is not None and b[0] == "list_platforms" and b[1] == {}
+    # plain text / malformed JSON must not match
+    assert _find_leaked_tool_call("no function call here") is None
+    assert _find_leaked_tool_call(
+        "<function/x>{not json}</function>") is None
+
+
 def test_planner_routes_analytical_intent():
     """Offline goal for enrichment must plan the real analysis tool."""
     from genevariate.core.chatbot import agent as agent_mod

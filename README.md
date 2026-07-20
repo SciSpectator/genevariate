@@ -88,7 +88,7 @@ Per-OS walkthroughs (including Docker, Windows, Homebrew) live in [INSTALL.md](I
 | GEOmetadb | Microarray catalogue | Any GPL; queried from disk on low-RAM devices |
 | ARCHS4 | Bulk RNA-seq | Uniformly-processed GEO/SRA counts via `archs4py` |
 | GEO Series (GPL) | Microarray matrices | Auto probe-to-gene mapping + quantile normalization |
-| Raw NGS counts | RNA-seq | CSV/TSV, 10x MTX dir, or `.h5ad` → QC → DESeq2 → GSEA (`core/count_io.py`) |
+| Raw NGS counts | RNA-seq | CSV/TSV (+ optional `.meta.csv` sidecar), 10x MTX dir, or `.h5ad` → QC → DESeq2 → GSEA (`core/count_io.py`) |
 | scRNA-seq pseudobulk | Single-cell → bulk | Via the canonical loader |
 | Methylation / peaks | β-values / intensities | Normalised through the same base class |
 
@@ -162,6 +162,14 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
   `compare_gene`, `classify_distributions` (modality landscape), `condition_enrichment`,
   `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
   Stouffer + GSEA), `rank_genes`, `run_ngs_de`.
+- **Robust to Llama tool-call quirks:** Llama-3.x occasionally emits a tool call in its
+  *native text* form (`<function=name>{…}</function>`) inside the message content instead of
+  through the structured tool-calls API — most often for the tool with the most parameters
+  (`run_ngs_de`). `run_agent` detects and executes that leaked call so the reasoning loop still
+  produces a real result.
+- **DESeq2 from a bare counts CSV:** a count matrix carries no design factor, so `load_counts`
+  auto-discovers a sibling metadata table (`<counts>.meta.csv` / `metadata.csv`, sample column
+  + condition columns) and hands it to the DESeq2 path — no h5ad required.
 - Tk-free core in `core/chatbot/` (`build_registry`, `route`, `run_agent`, `agent_available`).
 - Optional extra (pre-provision; otherwise auto-installed on first use):
   `pip install genevariate[agent]` (`langchain` + `langchain-groq` + `langchain-ollama`).

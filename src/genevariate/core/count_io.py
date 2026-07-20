@@ -131,12 +131,53 @@ def read_counts_h5ad(path) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 # -----------------------------------------------------------------
+# Sidecar sample metadata (CSV/TSV counts carry no design factor of
+# their own, so a differential-expression design must come from a
+# sibling metadata table — the standard convention for count matrices).
+# -----------------------------------------------------------------
+def read_sidecar_meta(counts_path, sample_cols) -> Optional[pd.DataFrame]:
+    """Find and load a per-sample metadata table sitting next to a counts CSV.
+
+    Looks for ``<stem>.meta.csv``, ``<stem>_meta.csv``, ``<stem>.metadata.csv``
+    (and ``.tsv`` variants) plus a plain ``metadata.csv``/``samples.csv`` in the
+    same directory. The metadata's sample identifiers come from a ``sample`` /
+    ``GSM`` / ``sample_id`` column (or the first column) and are reindexed to the
+    count matrix's sample columns. Returns ``None`` when no sidecar is found.
+    """
+    p = Path(counts_path)
+    stem = p.name[: -len("".join(p.suffixes))] if p.suffixes else p.name
+    candidates = []
+    for base in (stem,):
+        for tag in (".meta", "_meta", ".metadata", "_metadata"):
+            for ext in (".csv", ".tsv"):
+                candidates.append(p.with_name(f"{base}{tag}{ext}"))
+    for name in ("metadata.csv", "metadata.tsv", "samples.csv", "samples.tsv"):
+        candidates.append(p.with_name(name))
+
+    meta_path = next((c for c in candidates if c.exists()), None)
+    if meta_path is None:
+        return None
+
+    sep = "\t" if meta_path.suffix.lower() == ".tsv" else None
+    meta = pd.read_csv(meta_path, sep=sep, engine="python")
+    id_col = next((c for c in ("sample", "GSM", "sample_id", "Sample", "id")
+                   if c in meta.columns), meta.columns[0])
+    meta = meta.set_index(meta[id_col].astype(str))
+    meta.index.name = "sample"
+    # Align to the counts' sample order; drop the id column if it lingers.
+    meta = meta.reindex([str(s) for s in sample_cols])
+    return meta.drop(columns=[id_col], errors="ignore")
+
+
+# -----------------------------------------------------------------
 # Dispatch
 # -----------------------------------------------------------------
 def load_counts(path) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """Load raw counts from a CSV/TSV file, a 10x MTX directory, or an h5ad.
 
-    Returns (counts genes x samples, sample_meta or None).
+    Returns (counts genes x samples, sample_meta or None). For a CSV/TSV a
+    sibling metadata table (see :func:`read_sidecar_meta`) supplies the design
+    factor when present.
     """
     p = Path(path)
     if p.is_dir():
@@ -146,4 +187,5 @@ def load_counts(path) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
         return read_counts_h5ad(p)
     if p.name.lower().startswith("matrix.mtx"):
         return read_10x_mtx(p.parent), None
-    return read_counts_csv(p), None
+    counts = read_counts_csv(p)
+    return counts, read_sidecar_meta(p, counts.columns)

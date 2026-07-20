@@ -14,6 +14,7 @@ from genevariate.core.count_io import (
     read_counts_csv,
     read_10x_mtx,
     load_counts,
+    read_sidecar_meta,
 )
 
 
@@ -47,6 +48,37 @@ def test_platform_bridge_from_csv(tmp_path):
     assert "GSM" in df.columns
     expr, gsm = _expr_from_canonical(df)
     assert expr.shape[1] == 2
+
+
+def test_sidecar_meta_supplies_design_factor(tmp_path):
+    """A sibling ``<stem>.meta.csv`` becomes the DESeq2 design factor."""
+    counts = pd.DataFrame(
+        {"S0": [5, 1], "S1": [6, 2], "S2": [1, 9], "S3": [0, 8]},
+        index=["G1", "G2"])
+    p = tmp_path / "counts.csv"
+    counts.to_csv(p)
+    meta = pd.DataFrame({"sample": ["S0", "S1", "S2", "S3"],
+                         "condition": ["treated", "treated", "control", "control"]})
+    meta.to_csv(tmp_path / "counts.meta.csv", index=False)
+
+    # direct: reindexed to the count columns, id column dropped
+    got = read_sidecar_meta(p, counts.columns)
+    assert list(got.index) == ["S0", "S1", "S2", "S3"]
+    assert list(got["condition"]) == ["treated", "treated", "control", "control"]
+    assert "sample" not in got.columns
+
+    # via dispatch — load_counts now returns the sidecar as sample_meta
+    _, m = load_counts(p)
+    assert m is not None and m.loc["S2", "condition"] == "control"
+
+
+def test_no_sidecar_meta_returns_none(tmp_path):
+    counts = pd.DataFrame({"s1": [1, 2], "s2": [3, 4]}, index=["G1", "G2"])
+    p = tmp_path / "bare.csv"
+    counts.to_csv(p)
+    assert read_sidecar_meta(p, counts.columns) is None
+    _, m = load_counts(p)
+    assert m is None
 
 
 def test_10x_mtx_roundtrip(tmp_path):
