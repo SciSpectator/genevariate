@@ -10493,6 +10493,12 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                               command=self._open_enrichment_window)
         tools_menu.add_command(label="Discover Pseudo-Cohorts (embeddings)...",
                               command=self._open_pseudo_cohorts_window)
+        tools_menu.add_command(label="RNA-seq DE (raw counts)...",
+                              command=self._open_rnaseq_de)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Assistant (chat)...",
+                              accelerator="Ctrl+/",
+                              command=self._toggle_chat_sidebar)
 
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -10513,6 +10519,7 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         self.bind('<Control-D>', lambda e: self.open_compare_window())
         self.bind('<Control-k>', lambda e: self._open_dist_classification())
         self.bind('<Control-K>', lambda e: self._open_dist_classification())
+        self.bind('<Control-slash>', lambda e: self._toggle_chat_sidebar())
         self.bind('<F1>', lambda e: self._show_help())
     
     def _show_welcome_tip(self):
@@ -11125,7 +11132,15 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._bottom_frame = ttk.Frame(self)
         self._bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
-        main_canvas = tk.Canvas(self, highlightthickness=0, bg=AERO["bg_top"])
+        # Horizontal wrapper so a collapsible chat sidebar can sit to the
+        # right of the scroll area (created hidden; toggled with Ctrl+/).
+        self._content_row = ttk.Frame(self)
+        self._content_row.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self._chat_frame = ttk.Frame(self._content_row, width=340)
+        self._chat_sidebar = None
+        self._chat_visible = False
+
+        main_canvas = tk.Canvas(self._content_row, highlightthickness=0, bg=AERO["bg_top"])
         # Subtle Frutiger Aero sky→white→green gradient backdrop
         def _paint_main_bg(event=None):
             try:
@@ -11139,7 +11154,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             except Exception:
                 pass
         self._paint_main_bg = _paint_main_bg
-        main_vsb = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
+        main_vsb = ttk.Scrollbar(self._content_row, orient="vertical", command=main_canvas.yview)
+        self._main_canvas = main_canvas
+        self._main_vsb = main_vsb
         self._main_sf = ttk.Frame(main_canvas)
         self._main_sf.bind("<Configure>",
                            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all")))
@@ -11207,7 +11224,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         tools_btn_frame = ttk.Frame(tools_frame)
         tools_btn_frame.pack(fill=tk.X, pady=4)
-        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="toolbtn")
+        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="toolbtn")
 
         self.gene_explorer_btn = ttk.Button(
             tools_btn_frame, text="Gene Distribution Explorer",
@@ -11250,7 +11267,18 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                           "Browse and fetch single-cell RNA-seq data from the CELLxGENE Discover Census "
                           "(real public scRNA-seq submissions). Pseudo-bulk the result to use it in every other window, "
                           "or open cell-level plots (composition / UMAP / dot plot / QC).")
-        
+
+        self.rnaseq_de_btn = ttk.Button(
+            tools_btn_frame, text="RNA-seq DE (raw counts)",
+            command=self._open_rnaseq_de,
+            style="ToolGreen.TButton")
+        self.rnaseq_de_btn.grid(row=0, column=5, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.rnaseq_de_btn,
+                          "Load a raw count matrix (CSV / 10x MTX / h5ad), run QC + DESeq2 "
+                          "differential expression, then GSEA. Register the normalised matrix "
+                          "as a platform to use it in every other window. Needs pip install "
+                          "genevariate[rnaseq].")
+
         # ── Label Source (inside tools_frame - always visible) ──────
         ttk.Separator(tools_frame, orient='horizontal').pack(fill=tk.X, pady=(8, 4))
 
@@ -19200,6 +19228,58 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             messagebox.showerror(
                 "Single-cell (CELLxGENE)",
                 f"Could not open CELLxGENE browser:\n{exc}",
+                parent=self,
+            )
+
+    def _open_rnaseq_de(self):
+        """Open the RNA-seq differential-expression window (raw counts).
+
+        Loads a raw count matrix (CSV / 10x MTX dir / h5ad), runs QC +
+        DESeq2 median-of-ratios normalisation + negative-binomial DE
+        (pydeseq2) + GSEA, and can register the normalised matrix as a
+        platform in ``self.gpl_datasets``. Import-guarded so the app still
+        launches without the ``rnaseq`` extra installed.
+        """
+        try:
+            from genevariate.gui.windows.rnaseq_de import RnaSeqDEWindow
+            RnaSeqDEWindow(self)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "RNA-seq DE (raw counts)",
+                f"Could not open the RNA-seq DE window:\n{exc}",
+                parent=self,
+            )
+
+    def _toggle_chat_sidebar(self):
+        """Show/hide the conversational assistant sidebar (Ctrl+/).
+
+        Lazily creates a :class:`ChatSidebar` inside ``self._content_row``
+        (the wrapper around the main scroll area). The assistant proposes an
+        analysis tool + params from a typed request and only runs it after the
+        user confirms. Degrades to keyword routing when ollama is unavailable.
+        """
+        try:
+            frame = getattr(self, "_chat_frame", None)
+            if frame is None:
+                return
+            if getattr(self, "_chat_visible", False):
+                frame.pack_forget()
+                self._chat_visible = False
+                return
+            if getattr(self, "_chat_sidebar", None) is None:
+                from genevariate.gui.windows.chat_sidebar import ChatSidebar
+                self._chat_sidebar = ChatSidebar(frame, self)
+                self._chat_sidebar.pack(fill=tk.BOTH, expand=True)
+            frame.pack(side=tk.RIGHT, fill=tk.Y, before=self._main_vsb)
+            self._chat_visible = True
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "Assistant",
+                f"Could not open the assistant sidebar:\n{exc}",
                 parent=self,
             )
 

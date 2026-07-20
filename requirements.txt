@@ -25,6 +25,11 @@ ollama
 # torch>=1.11
 # transformers>=4.21
 
+# RNA-seq raw-count DE pipeline (optional — the "RNA-seq DE (raw counts)" tool):
+# install via `pip install genevariate[rnaseq]` for pydeseq2 + anndata.
+# pydeseq2>=0.4
+# anndata>=0.9
+
 # Quantile normalization (optional but recommended)
 qnorm
 

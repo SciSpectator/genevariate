@@ -88,6 +88,7 @@ Per-OS walkthroughs (including Docker, Windows, Homebrew) live in [INSTALL.md](I
 | GEOmetadb | Microarray catalogue | Any GPL; queried from disk on low-RAM devices |
 | ARCHS4 | Bulk RNA-seq | Uniformly-processed GEO/SRA counts via `archs4py` |
 | GEO Series (GPL) | Microarray matrices | Auto probe-to-gene mapping + quantile normalization |
+| Raw NGS counts | RNA-seq | CSV/TSV, 10x MTX dir, or `.h5ad` → QC → DESeq2 → GSEA (`core/count_io.py`) |
 | scRNA-seq pseudobulk | Single-cell → bulk | Via the canonical loader |
 | Methylation / peaks | β-values / intensities | Normalised through the same base class |
 
@@ -109,6 +110,29 @@ downstream tool consumes them identically.
 - **Embedding-clustered pseudo-cohorts** — auto-discover case/control groups from LLM labels
 
 See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail.
+
+### NGS raw-count differential expression
+
+- **RNA-seq DE window** (Analysis Tools → *RNA-seq DE (raw counts)*) — load a raw count
+  matrix (CSV/TSV, 10x MTX directory, or `.h5ad`), run QC (library size, genes detected,
+  %mito), DESeq2 median-of-ratios normalisation, negative-binomial DE via
+  [`pydeseq2`](https://github.com/owkin/PyDESeq2), then GSEA on the Wald statistic
+- Register the normalised matrix as a platform so every other window can reuse it
+- Headless API in `core/analysis/rnaseq.py` (`compute_qc_metrics`, `cpm_normalize`,
+  `deseq2_size_factors`, `run_deseq2`, `deseq_results_to_ranked`, `counts_to_platform_df`)
+- Optional extra: `pip install genevariate[rnaseq]` (pulls `pydeseq2` + `anndata`)
+
+### Conversational assistant (confirm-before-run)
+
+- Collapsible chat sidebar (**Ctrl+/** or Tools → *Assistant*) — type a request such as
+  *“run condition enrichment on GPL570 tumor vs normal”* and the assistant proposes ONE
+  tool + parameters
+- **Nothing runs until you confirm**: an editable card shows the resolved parameters; you
+  click *Run* to execute on the shared progress bar
+- Local LLM routing via Ollama when available, with a deterministic keyword fallback when
+  it is not — the app works either way, no cloud calls
+- Tk-free core in `core/chatbot/` (`build_registry`, `route`); every tool calls the
+  existing analysis API rather than reimplementing it
 
 ### Infrastructure
 
@@ -140,6 +164,9 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
 |---|---|
 | `core/sources/base.py` | Canonical-format contract + shared CSV writer |
 | `core/sources/archs4.py` | ARCHS4 bulk RNA-seq ingestion |
+| `core/count_io.py` | Raw-count readers (CSV/TSV, 10x MTX, h5ad) → genes × samples |
+| `core/analysis/rnaseq.py` | QC + CPM + DESeq2 size factors/DE + GSEA bridge |
+| `core/chatbot/` | Tk-free assistant: tool registry + LLM/keyword router |
 | `core/db_loader.py` | Shared GEOmetadb loader (decompress once, tier-adapted cache) |
 | `core/gpl_downloader.py` | GPL annotation download, probe-to-gene, quantile normalization |
 | `core/extraction.py` | LLM prompts, parsers, Phase 1.5 deterministic rules |

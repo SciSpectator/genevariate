@@ -60,8 +60,10 @@ llm-extract = [
     "transformers>=4.21",
 ]
 # For the empirical Bayes moderated t-statistic and RNA-seq DE
+# (raw counts -> QC -> DESeq2 -> GSEA; anndata enables the .h5ad count path)
 rnaseq = [
     "pydeseq2>=0.4",
+    "anndata>=0.9",
 ]
 dev = [
     "pytest>=8.0",

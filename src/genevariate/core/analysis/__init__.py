@@ -34,6 +34,14 @@ from .pseudo_cohorts import (
     cohort_pairs,
     PseudoCohortResult,
 )
+from .rnaseq import (
+    compute_qc_metrics,
+    cpm_normalize,
+    deseq2_size_factors,
+    run_deseq2,
+    deseq_results_to_ranked,
+    counts_to_platform_df,
+)
 
 __all__ = [
     "run_enrichr",
@@ -45,4 +53,10 @@ __all__ = [
     "run_variability_gsea",
     "variability_report_markdown",
     "VARIABILITY_METHODS",
+    "compute_qc_metrics",
+    "cpm_normalize",
+    "deseq2_size_factors",
+    "run_deseq2",
+    "deseq_results_to_ranked",
+    "counts_to_platform_df",
 ]
