@@ -108,6 +108,19 @@ def _gene_stats(values: np.ndarray) -> Dict[str, float]:
     }
 
 
+def _gsea_term_count(gsea: Optional[pd.DataFrame]) -> int:
+    """Count real enriched terms, excluding per-library error rows.
+
+    ``run_prerank_gsea`` returns rows with an ``error`` column when a library
+    fails (e.g. no gene overlap); those must not be counted as enriched terms.
+    """
+    if gsea is None or gsea.empty:
+        return 0
+    if "error" in gsea.columns:
+        return int(gsea["error"].isna().sum())
+    return int(len(gsea))
+
+
 def _default_case_control(df: pd.DataFrame, column: str) -> Tuple[str, str]:
     vals = [v for v in df[column].astype(str) if v and v.lower() != "nan"]
     common = [v for v, _ in Counter(vals).most_common()]
@@ -196,8 +209,8 @@ def build_registry(app) -> Dict[str, Tool]:
                                          moderated=bool(resolved.get("moderated", False)))
         progress_cb(60.0, "Running prerank GSEA…")
         gsea = run_prerank_gsea(ranked, gene_sets=libs)
-        top = gsea.head(15) if gsea is not None and not gsea.empty else ranked.head(15)
-        n = 0 if gsea is None else len(gsea)
+        n = _gsea_term_count(gsea)
+        top = gsea.head(15) if n else ranked.head(15)
         comparison = f"{case} vs {control} on {resolved.get('platform')}"
         try:
             report = enrichment_report_markdown(None, gsea, comparison)
@@ -227,8 +240,8 @@ def build_registry(app) -> Dict[str, Tool]:
         ranked = rank_genes_by_variability(df, labels, case, control, **kwargs)
         progress_cb(60.0, "Running variability GSEA…")
         gsea = run_variability_gsea(ranked, gene_sets=libs)
-        top = gsea.head(15) if gsea is not None and not gsea.empty else ranked.head(15)
-        n = 0 if gsea is None else len(gsea)
+        n = _gsea_term_count(gsea)
+        top = gsea.head(15) if n else ranked.head(15)
         comparison = f"{case} vs {control} on {resolved.get('platform')}"
         try:
             report = variability_report_markdown(
@@ -290,12 +303,11 @@ def build_registry(app) -> Dict[str, Tool]:
         libs = [s.strip() for s in str(resolved.get("libraries", libs_default)).split(",")
                 if s.strip()]
         gsea = run_prerank_gsea(ranked, gene_sets=libs)
-        n = 0 if gsea is None else len(gsea)
+        n = _gsea_term_count(gsea)
         return ToolResult(
             f"DESeq2 DE + GSEA ({case} vs {control}): {len(res)} genes tested, "
             f"{n} enriched term(s).",
-            table=(gsea.head(15) if gsea is not None and not gsea.empty
-                   else ranked.head(15)),
+            table=(gsea.head(15) if n else ranked.head(15)),
             payload={"deseq": res, "ranked": ranked, "gsea": gsea})
 
     # ---- classify_distributions (modality landscape) ------------
@@ -415,9 +427,8 @@ def build_registry(app) -> Dict[str, Tool]:
                 combined, gsea, used, comparison, method)
         except Exception:
             report = ""
-        n = 0 if gsea is None else len(gsea)
-        top = (gsea.head(15) if gsea is not None and not gsea.empty
-               else combined.head(15))
+        n = _gsea_term_count(gsea)
+        top = gsea.head(15) if n else combined.head(15)
         return ToolResult(
             f"Cross-platform meta-enrichment ({method}) over {len(used)} "
             f"platform(s): {n} consensus term(s).",

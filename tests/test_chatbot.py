@@ -65,6 +65,26 @@ def test_keyword_route_list_platforms():
     assert action.tool == "list_platforms"
 
 
+def test_keyword_extracts_gene_and_platform():
+    reg = build_registry(FakeApp())
+    a = route("analyze the distribution of TP53 on GPL570", reg)
+    assert a.tool == "gene_distribution"
+    assert a.params.get("gene") == "TP53"
+    assert a.params.get("platform") == "GPL570"
+    # platform id must survive even when it differs from the first loaded one
+    a2 = route("rank genes tumor vs normal on GPL96", reg)
+    assert a2.tool == "rank_genes"
+    assert a2.params.get("platform") == "GPL96"
+
+
+def test_keyword_extracts_multiple_platforms_for_compare():
+    reg = build_registry(FakeApp())
+    a = route("compare EGFR across GPL570 and GPL96", reg)
+    assert a.tool == "compare_gene"
+    assert a.params.get("gene") == "EGFR"
+    assert a.params.get("platforms") == ["GPL570", "GPL96"]
+
+
 def test_keyword_route_ngs_path():
     reg = build_registry(FakeApp())
     action = route("run deseq2 on data/counts.csv treated vs control", reg)
@@ -134,6 +154,17 @@ def test_classify_distributions_tool_runs():
     # only the five gene columns are classified, not the metadata columns
     assert set(tags.index) == {f"G{i}" for i in range(5)}
     assert result.report
+
+
+def test_gsea_term_count_excludes_error_rows():
+    from genevariate.core.chatbot.registry import _gsea_term_count
+    assert _gsea_term_count(None) == 0
+    assert _gsea_term_count(pd.DataFrame()) == 0
+    # a gseapy failure frame carries an 'error' column — not real terms
+    errs = pd.DataFrame({"library": ["A", "B"], "error": ["no overlap", "boom"]})
+    assert _gsea_term_count(errs) == 0
+    ok = pd.DataFrame({"Term": ["t1", "t2"], "NES": [1.0, -1.0]})
+    assert _gsea_term_count(ok) == 2
 
 
 def test_gene_distribution_tool_reports():

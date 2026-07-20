@@ -138,6 +138,22 @@ def _keyword_route(prompt: str, registry: Dict[str, Tool]) -> Action:
 
 _VS = re.compile(r"([A-Za-z0-9_\- ]+?)\s+(?:vs\.?|versus|against)\s+([A-Za-z0-9_\- ]+)",
                  re.IGNORECASE)
+_PLATFORM = re.compile(r"\bGPL\d+\b", re.IGNORECASE)
+# an uppercase gene-symbol-like token (has a digit or is 2-8 all-caps letters)
+_GENE = re.compile(r"\b([A-Z][A-Z0-9]{1,7})\b")
+# tokens that look like genes but never are, so we don't mis-extract them
+_NOT_GENE = {"GPL", "GSM", "VS", "GO", "KEGG", "GSEA", "NGS", "DE", "RNA",
+             "CSV", "TSV", "DESEQ2", "DESEQ", "QC", "CPM", "ID", "AI", "GEO",
+             "MTX", "H5AD", "TP", "MSIGDB", "KS", "FDR", "NES"}
+
+
+def _extract_gene(prompt: str) -> Optional[str]:
+    for tok in _GENE.findall(prompt):
+        up = tok.upper()
+        if up in _NOT_GENE or _PLATFORM.fullmatch(up):
+            continue
+        return up
+    return None
 
 
 def _extract_keyword_params(prompt: str, tool: Tool) -> Dict[str, Any]:
@@ -147,6 +163,18 @@ def _extract_keyword_params(prompt: str, tool: Tool) -> Dict[str, Any]:
     if m and "case_label" in names:
         params["case_label"] = m.group(1).strip().split()[-1]
         params["control_label"] = m.group(2).strip().split()[0]
+    # gene symbol (single, e.g. TP53) for the per-gene tools
+    if "gene" in names:
+        g = _extract_gene(prompt)
+        if g:
+            params["gene"] = g
+    # platform id(s) — GPL#### mentioned in the prompt
+    plats = [p.upper() for p in _PLATFORM.findall(prompt)]
+    if plats:
+        if "platforms" in names:
+            params["platforms"] = list(dict.fromkeys(plats))
+        elif "platform" in names:
+            params["platform"] = plats[0]
     # a bare path for the NGS tool
     if "counts_path" in names:
         pm = re.search(r"(\S+\.(?:csv|tsv|h5ad|txt|gz))", prompt, re.IGNORECASE)
