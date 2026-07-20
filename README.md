@@ -146,7 +146,9 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
   (and, for local, installs/starts Ollama and pulls the model), streaming progress in the
   sidebar (Stop cancels). Override the model with `GENEVARIATE_AGENT_MODEL`. If a hosted key is
   declined it drops to the local model; if that's unavailable it falls back to a deterministic
-  heuristic planner, then keyword routing — the app works either way.
+  heuristic planner, then keyword routing — the app works either way. The offline planner
+  chains data loading with the real analyses (condition/variability/meta enrichment, ranking,
+  modality, DESeq2) so agentic goals still run end-to-end without any LLM.
 - **Optimized local inference (quantization):** the local model runs as a **quantized GGUF**
   through Ollama/llama.cpp so a 7B fits ~8 GB VRAM at roughly double the fp16 throughput.
   Pick the GGUF level with `GENEVARIATE_AGENT_QUANT` (`q4_K_M` default → `q5_K_M` → `q8_0`;

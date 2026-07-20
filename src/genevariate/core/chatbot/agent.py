@@ -81,7 +81,11 @@ def _extract_gene(goal: str) -> Optional[str]:
     m = re.search(r"\bof\s+([A-Za-z][A-Za-z0-9\-]{1,9})\b", goal, re.IGNORECASE)
     if m and m.group(1).upper() not in _STOPWORDS:
         return m.group(1).upper()
-    for tok in _GENE_RE.findall(goal.upper()):
+    # Otherwise only accept tokens the user actually wrote in UPPER case: gene
+    # symbols are conventionally uppercase (TP53, EGFR), whereas ordinary words
+    # ("load", "condition", "run") are lowercase — matching the ORIGINAL text
+    # (not an upper-cased copy) avoids reading verbs/nouns as genes.
+    for tok in _GENE_RE.findall(goal):
         if tok not in _STOPWORDS and not _GPL.fullmatch(tok):
             return tok
     return None
@@ -156,6 +160,26 @@ def _heuristic_plan(goal: str, app, registry: Dict[str, Tool]) -> Plan:
         steps.append(Step("compare_gene",
                           {"gene": gene, "platforms": list(produced)},
                           f"Compare {gene} across {', '.join(produced)}"))
+
+    # 4) analytical intent — enrichment / ranking / modality / meta / NGS.
+    # Reuse the deterministic keyword router to pick the tool + params, then
+    # target whatever platform(s) we just loaded, so an offline goal like
+    # "run condition enrichment on GPL570 tumor vs normal" runs the real
+    # analysis instead of degrading to a bare gene profile.
+    from .router import _keyword_route
+    _ANALYTIC = {"condition_enrichment", "variability_enrichment", "rank_genes",
+                 "classify_distributions", "meta_enrichment", "run_ngs_de"}
+    if not any(s.tool in _ANALYTIC for s in steps):
+        act = _keyword_route(goal, registry)
+        if act.tool in _ANALYTIC and act.tool in registry:
+            p = dict(act.params)
+            if act.tool == "meta_enrichment":
+                if not p.get("platforms") and len(produced) >= 2:
+                    p["platforms"] = list(produced)
+            elif act.tool != "run_ngs_de":
+                if not p.get("platform") and produced:
+                    p["platform"] = produced[0]
+            steps.append(Step(act.tool, p, f"Run {act.tool}"))
 
     msg = ""
     if not steps:

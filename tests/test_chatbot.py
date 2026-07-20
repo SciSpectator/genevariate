@@ -175,3 +175,48 @@ def test_gene_distribution_tool_reports():
     result = tool.executor(app, resolved, lambda v, t: None)
     assert result.ok
     assert "G0" in result.report
+
+
+def test_run_ngs_de_missing_file_is_graceful():
+    """A non-existent count path must return ok=False, never raise."""
+    app = FakeApp()
+    reg = build_registry(app)
+    tool = reg["run_ngs_de"]
+    resolved = tool.coerce(tool.resolver(app, {
+        "counts_path": "/tmp/gv_does_not_exist_1234.csv",
+        "condition_column": "cond", "case_label": "a", "control_label": "b"}))
+    result = tool.executor(app, resolved, lambda v, t: None)
+    assert result.ok is False
+    assert "not found" in result.summary.lower()
+
+
+def test_planner_reads_gene_not_verb():
+    """The offline planner must not read the word 'load' as gene 'LOAD'."""
+    from genevariate.core.chatbot import agent as agent_mod
+    app = FakeApp()
+    reg = build_registry(app)
+    plan = agent_mod.plan(
+        "load GPL570 and GPL96 then compare TP53 across them", app, reg)
+    tools = [s.tool for s in plan.steps]
+    assert tools.count("load_geo_platform") == 2      # both GPLs loaded
+    cmp = [s for s in plan.steps if s.tool == "compare_gene"]
+    assert cmp and cmp[0].params.get("gene") == "TP53"
+    # no step should carry a bogus gene extracted from an English verb
+    for s in plan.steps:
+        assert s.params.get("gene") in (None, "TP53")
+
+
+def test_planner_routes_analytical_intent():
+    """Offline goal for enrichment must plan the real analysis tool."""
+    from genevariate.core.chatbot import agent as agent_mod
+    app = FakeApp()
+    reg = build_registry(app)
+    plan = agent_mod.plan(
+        "run condition enrichment on GPL570 tumor vs normal", app, reg)
+    tools = [s.tool for s in plan.steps]
+    assert "condition_enrichment" in tools
+    ce = [s for s in plan.steps if s.tool == "condition_enrichment"][0]
+    assert ce.params.get("case_label") == "tumor"
+    assert ce.params.get("control_label") == "normal"
+    # it should NOT degrade to profiling a bogus gene like 'CONDITION'
+    assert "gene_distribution" not in tools

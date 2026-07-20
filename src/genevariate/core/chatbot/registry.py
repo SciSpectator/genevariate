@@ -274,6 +274,7 @@ def build_registry(app) -> Dict[str, Tool]:
         return out
 
     def _ngs_exec(app, resolved, progress_cb):
+        import os
         from genevariate.core.count_io import load_counts
         from genevariate.core.analysis import (
             run_deseq2, deseq_results_to_ranked,
@@ -282,6 +283,9 @@ def build_registry(app) -> Dict[str, Tool]:
         if not path:
             return ToolResult("counts_path is required (CSV, 10x dir, or h5ad).",
                               ok=False)
+        if not os.path.exists(path):
+            return ToolResult(f"Count file not found: {path!r}. Provide a valid "
+                              "CSV/TSV, 10x directory, or .h5ad path.", ok=False)
         column = resolved.get("condition_column")
         case = resolved.get("case_label")
         control = resolved.get("control_label")
@@ -290,7 +294,11 @@ def build_registry(app) -> Dict[str, Tool]:
                 "condition_column, case_label and control_label are required "
                 "for DESeq2.", ok=False)
         progress_cb(15.0, "Loading counts…")
-        counts, meta = load_counts(path)
+        try:
+            counts, meta = load_counts(path)
+        except Exception as exc:
+            return ToolResult(f"Could not read counts from {path!r}: {exc}",
+                              ok=False)
         if meta is None or column not in meta.columns:
             return ToolResult(
                 f"Sample metadata has no column {column!r}; DESeq2 needs a "
