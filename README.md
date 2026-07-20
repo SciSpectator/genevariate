@@ -117,10 +117,31 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
   matrix (CSV/TSV, 10x MTX directory, or `.h5ad`), run QC (library size, genes detected,
   %mito), DESeq2 median-of-ratios normalisation, negative-binomial DE via
   [`pydeseq2`](https://github.com/owkin/PyDESeq2), then GSEA on the Wald statistic
-- Register the normalised matrix as a platform so every other window can reuse it
+- Register the normalised matrix as a platform so every other window can reuse it — the
+  assistant's `run_ngs_de` tool takes a `register_as` name to publish log-CPM counts as a
+  **modality** you can then compare/connect against microarray and single-cell data
 - Headless API in `core/analysis/rnaseq.py` (`compute_qc_metrics`, `cpm_normalize`,
   `deseq2_size_factors`, `run_deseq2`, `deseq_results_to_ranked`, `counts_to_platform_df`)
 - Optional extra: `pip install genevariate[rnaseq]` (pulls `pydeseq2` + `anndata`)
+
+### Cross-modality gene analysis (`core/analysis/cross_modality.py`)
+
+The same gene measured by microarray (log2 intensity), bulk RNA-seq (log-CPM), and
+single-cell pseudo-bulk lives on three different scales, so naive cross-source tests are
+meaningless. This module makes the comparison honest and adds gene–gene connection finding:
+
+- **Same gene across modalities** (`compare_gene_across_modalities`) — harmonise each source
+  to a common scale (`zscore` or `rank`), then a KS test on the harmonised values asks whether
+  the gene's distribution *shape* is consistent across modalities, and the modality of each
+  source is auto-labelled (`infer_modality`).
+- **Connections between genes** (`gene_coexpression`) — Pearson/Spearman co-expression of a
+  query gene against every other gene within one source (positive and inverse partners).
+- **Reproducible connections** (`coexpression_consensus`) — keep only the partners whose link
+  to the query gene holds, with a consistent sign, across two or more sources/modalities, so
+  co-expression edges are reproducible rather than platform artefacts.
+- Exposed to the assistant as the `compare_modalities` and `gene_connections` tools (e.g.
+  *“compare TP53 across microarray and rna-seq modalities”*, *“find co-expression partners of
+  EGFR consistent across platforms”*).
 
 ### AI analysis agent + conversational assistant
 
@@ -159,7 +180,9 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
 - Tools (each calls the existing analysis API rather than reimplementing it, and returns a
   markdown **description + analysis** you can open in a scrollable *View report* window):
   `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
-  `compare_gene`, `classify_distributions` (modality landscape), `condition_enrichment`,
+  `compare_gene`, `compare_modalities` (same gene across microarray/RNA-seq/single-cell,
+  harmonised), `gene_connections` (co-expression links within a source or consensus across
+  modalities), `classify_distributions` (modality landscape), `condition_enrichment`,
   `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
   Stouffer + GSEA), `rank_genes`, `run_ngs_de`.
 - **Robust to Llama tool-call quirks:** Llama-3.x occasionally emits a tool call in its

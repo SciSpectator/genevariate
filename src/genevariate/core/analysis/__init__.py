@@ -42,6 +42,13 @@ from .rnaseq import (
     deseq_results_to_ranked,
     counts_to_platform_df,
 )
+from .cross_modality import (
+    infer_modality,
+    harmonize_vectors,
+    compare_gene_across_modalities,
+    gene_coexpression,
+    coexpression_consensus,
+)
 
 __all__ = [
     "run_enrichr",
@@ -69,4 +76,9 @@ __all__ = [
     "run_deseq2",
     "deseq_results_to_ranked",
     "counts_to_platform_df",
+    "infer_modality",
+    "harmonize_vectors",
+    "compare_gene_across_modalities",
+    "gene_coexpression",
+    "coexpression_consensus",
 ]

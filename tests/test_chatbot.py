@@ -46,8 +46,50 @@ def test_registry_has_core_tools():
     for name in ("list_platforms", "condition_enrichment",
                  "variability_enrichment", "rank_genes", "run_ngs_de",
                  "classify_distributions", "meta_enrichment",
-                 "gene_distribution", "compare_gene"):
+                 "gene_distribution", "compare_gene",
+                 "compare_modalities", "gene_connections"):
         assert name in reg
+
+
+def _coexpr_platform(seed, n=40, scale=1.0, offset=7.0):
+    rng = np.random.default_rng(seed)
+    tp53 = rng.normal(offset, scale, n)
+    return pd.DataFrame({
+        "GSM": [f"GSM{seed}_{i}" for i in range(n)],
+        "Classified_condition": ["a"] * n,
+        "TP53": tp53,
+        "MDM2": tp53 * 0.9 + rng.normal(0, scale * 0.2, n),
+        "NOISE": rng.normal(0, 1, n),
+    })
+
+
+def test_compare_modalities_tool_runs():
+    app = FakeApp({"GPL570": _coexpr_platform(1, scale=1.0, offset=7.0),
+                   "RNAseq_x": _coexpr_platform(2, scale=3.0, offset=2.0)})
+    reg = build_registry(app)
+    tool = reg["compare_modalities"]
+    resolved = tool.coerce(tool.resolver(app, {"gene": "TP53"}))
+    assert resolved["method"] == "zscore"
+    result = tool.executor(app, resolved, lambda v, t: None)
+    assert result.ok
+    assert set(result.table["modality"]) == {"microarray", "rna-seq"}
+    assert result.report
+
+
+def test_gene_connections_single_and_consensus():
+    app = FakeApp({"GPL570": _coexpr_platform(1, scale=1.0, offset=7.0),
+                   "RNAseq_x": _coexpr_platform(2, scale=3.0, offset=2.0)})
+    reg = build_registry(app)
+    tool = reg["gene_connections"]
+    # single source
+    one = tool.executor(app, tool.coerce(tool.resolver(
+        app, {"gene": "TP53", "platforms": ["GPL570"]})), lambda v, t: None)
+    assert one.ok and "MDM2" in one.table.index
+    # cross-modality consensus (both sources)
+    both = tool.executor(app, tool.coerce(tool.resolver(
+        app, {"gene": "TP53"})), lambda v, t: None)
+    assert both.ok and "MDM2" in both.table.index
+    assert "NOISE" not in both.table.index
 
 
 def test_keyword_route_condition_enrichment():

@@ -312,11 +312,38 @@ def build_registry(app) -> Dict[str, Tool]:
                 if s.strip()]
         gsea = run_prerank_gsea(ranked, gene_sets=libs)
         n = _gsea_term_count(gsea)
+
+        # Optionally publish log-CPM-normalised counts as a platform so the NGS
+        # result becomes a modality you can compare / connect against the others.
+        registered = None
+        register_as = str(resolved.get("register_as") or "").strip()
+        if register_as:
+            from genevariate.core.analysis import (
+                cpm_normalize, counts_to_platform_df,
+            )
+            progress_cb(90.0, f"Registering {register_as} as a platform…")
+            norm = cpm_normalize(counts, log=True)
+            meta2 = meta.copy()
+            if column in meta2.columns:
+                meta2 = meta2.rename(columns={column: f"Classified_{column}"})
+            plat_df = counts_to_platform_df(norm, sample_meta=meta2)
+            key = (register_as if register_as not in _platforms(app)
+                   else f"{register_as}_{len(_platforms(app))}")
+            app.gpl_datasets[key] = plat_df
+            registered = key
+            try:
+                app.after(0, app._update_platform_status)
+            except Exception:
+                pass
+
+        extra = f" Registered normalised counts as platform {registered!r}." \
+            if registered else ""
         return ToolResult(
             f"DESeq2 DE + GSEA ({case} vs {control}): {len(res)} genes tested, "
-            f"{n} enriched term(s).",
+            f"{n} enriched term(s).{extra}",
             table=(gsea.head(15) if n else ranked.head(15)),
-            payload={"deseq": res, "ranked": ranked, "gsea": gsea})
+            payload={"deseq": res, "ranked": ranked, "gsea": gsea,
+                     "registered": registered})
 
     # ---- classify_distributions (modality landscape) ------------
     def _modality_resolver(app, raw):
@@ -508,6 +535,10 @@ def build_registry(app) -> Dict[str, Tool]:
                       help="Comma-separated gene-set libraries."),
             ToolParam("min_count", "int", required=False, default=10,
                       help="Drop genes with total count below this."),
+            ToolParam("register_as", "str", required=False,
+                      help="If set, publish log-CPM counts under this platform "
+                           "name so the NGS result can be compared/connected "
+                           "against other modalities."),
         ],
         resolver=_ngs_resolver, executor=_ngs_exec,
         examples=("run deseq2 on counts.csv treated vs control",
@@ -687,6 +718,154 @@ def build_registry(app) -> Dict[str, Tool]:
         examples=("compare TP53 across single cell and GEO",
                   "compare distribution of BRCA1 between GPL570 and GPL96",
                   "how does EGFR differ across platforms"))
+
+    # ---- compare_modalities (same gene, harmonised across modalities) --
+    def _cross_resolver(app, raw):
+        out = _cmp_resolver(app, raw)  # reuse platforms parsing
+        m = str(raw.get("method") or "zscore").strip().lower()
+        out["method"] = m if m in ("zscore", "rank", "none") else "zscore"
+        return out
+
+    def _cross_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import compare_gene_across_modalities
+        gene = str(resolved.get("gene") or "").strip()
+        keys = resolved.get("platforms") or []
+        if not gene:
+            return ToolResult("Which gene should I compare across modalities?",
+                              ok=False)
+        if len(keys) < 2:
+            return ToolResult("Need at least two sources/modalities to compare. "
+                              "Load or fetch them first.", ok=False)
+        plats = _platforms(app)
+        sources = {k: plats[k] for k in keys if k in plats}
+        if len(sources) < 2:
+            return ToolResult("Fewer than two of those sources are loaded.",
+                              ok=False)
+        progress_cb(40.0, f"Harmonising {gene} across modalities…")
+        res = compare_gene_across_modalities(
+            sources, gene, method=str(resolved.get("method", "zscore")))
+        tbl = res["table"]
+        n_found = int(tbl["n"].fillna(0).gt(0).sum()) if "n" in tbl.columns else 0
+        if n_found == 0:
+            return ToolResult(f"{gene!r} was not found in any source.", ok=False)
+        return ToolResult(res["summary"], table=res["table"],
+                          report=res["report"],
+                          payload={"gene": gene, "pairwise": res["pairwise"],
+                                   "harmonized": res["harmonized"],
+                                   "concordant": res["concordant"],
+                                   "report": res["report"]})
+
+    tools["compare_modalities"] = Tool(
+        name="compare_modalities",
+        description="Compare the SAME gene across different data modalities "
+                    "(microarray / RNA-seq / single-cell) on a harmonised scale "
+                    "(z-score or rank), then test whether its distribution shape "
+                    "is consistent across modalities.",
+        params=[
+            ToolParam("gene", "str", help="Gene symbol to compare."),
+            ToolParam("platforms", "list", required=False,
+                      help="Sources/modalities to compare (defaults to all loaded)."),
+            ToolParam("method", "str", required=False, default="zscore",
+                      choices=("zscore", "rank", "none"),
+                      help="Scale-harmonisation method."),
+        ],
+        resolver=_cross_resolver, executor=_cross_exec,
+        examples=("compare TP53 across microarray and rna-seq modalities",
+                  "is EGFR consistent between single cell and bulk",
+                  "harmonise and compare BRCA1 across platforms"))
+
+    # ---- gene_connections (co-expression links) -----------------
+    def _conn_resolver(app, raw):
+        out = _cmp_resolver(app, raw)  # platforms parsing
+        m = str(raw.get("method") or "pearson").strip().lower()
+        out["method"] = m if m in ("pearson", "spearman") else "pearson"
+        try:
+            out["top_n"] = int(raw.get("top_n", 25))
+        except (TypeError, ValueError):
+            out["top_n"] = 25
+        try:
+            out["min_abs"] = float(raw.get("min_abs", 0.3))
+        except (TypeError, ValueError):
+            out["min_abs"] = 0.3
+        return out
+
+    def _conn_exec(app, resolved, progress_cb):
+        from genevariate.core.analysis import (
+            gene_coexpression, coexpression_consensus,
+        )
+        gene = str(resolved.get("gene") or "").strip()
+        keys = resolved.get("platforms") or []
+        if not gene:
+            return ToolResult("Which gene's connections should I find?", ok=False)
+        plats = _platforms(app)
+        keys = [k for k in keys if k in plats]
+        if not keys:
+            return ToolResult("No matching source is loaded. Load one first.",
+                              ok=False)
+        method = str(resolved.get("method", "pearson"))
+        top_n = int(resolved.get("top_n", 25))
+        # >=2 sources -> cross-modality consensus; else within one source.
+        if len(keys) >= 2:
+            progress_cb(40.0, f"Finding consensus connections for {gene}…")
+            sources = {k: plats[k] for k in keys}
+            res = coexpression_consensus(
+                sources, gene, method=method, top_n=top_n,
+                min_abs=float(resolved.get("min_abs", 0.3)))
+            if res["table"].empty:
+                return ToolResult(res["summary"], ok=False)
+            return ToolResult(res["summary"], table=res["table"],
+                              report=res["report"],
+                              payload={"gene": gene, "sources": res["sources"],
+                                       "report": res["report"]})
+        key = keys[0]
+        progress_cb(40.0, f"Correlating {gene} against all genes on {key}…")
+        try:
+            tbl = gene_coexpression(plats[key], gene, method=method,
+                                    top_n=top_n,
+                                    min_abs=float(resolved.get("min_abs", 0.0)))
+        except ValueError as exc:
+            return ToolResult(str(exc), ok=False)
+        if tbl.empty:
+            return ToolResult(f"No co-expression partners found for {gene} on "
+                              f"{key}.", ok=False)
+        pos = tbl[tbl["r"] > 0].head(8)
+        neg = tbl[tbl["r"] < 0].head(8)
+        lines = [f"# {gene} connections — {key}\n",
+                 f"Top co-expressed genes ({method}):\n"]
+        for g, row in pos.iterrows():
+            lines.append(f"- **{g}**: r={row['r']:.3f} (positive)")
+        for g, row in neg.iterrows():
+            lines.append(f"- **{g}**: r={row['r']:.3f} (inverse)")
+        report = "\n".join(lines)
+        top_names = ", ".join(list(tbl.index[:8]))
+        return ToolResult(
+            f"{gene} on {key}: {len(tbl)} connection(s). Top: {top_names}.",
+            table=tbl, report=report,
+            payload={"gene": gene, "platform": key, "report": report})
+
+    tools["gene_connections"] = Tool(
+        name="gene_connections",
+        description="Find genes connected to a query gene by co-expression "
+                    "(Pearson/Spearman) within one source; with two or more "
+                    "sources, keep only the partners whose connection holds "
+                    "across modalities (consensus, consistent sign).",
+        params=[
+            ToolParam("gene", "str", help="Query gene symbol."),
+            ToolParam("platforms", "list", required=False,
+                      help="Source(s) to search (defaults to all loaded); "
+                           ">=2 gives a cross-modality consensus."),
+            ToolParam("method", "str", required=False, default="pearson",
+                      choices=("pearson", "spearman"),
+                      help="Correlation method."),
+            ToolParam("top_n", "int", required=False, default=25,
+                      help="How many partners to return."),
+            ToolParam("min_abs", "float", required=False, default=0.3,
+                      help="Minimum |r| to keep a connection."),
+        ],
+        resolver=_conn_resolver, executor=_conn_exec,
+        examples=("what genes are connected to TP53 on GPL570",
+                  "find co-expression partners of EGFR consistent across platforms",
+                  "which genes correlate with BRCA1"))
 
     # ---- load_geo_platform (headless, no dialogs) ---------------
     def _load_resolver(app, raw):
