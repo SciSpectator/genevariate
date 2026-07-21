@@ -11336,13 +11336,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             header_canvas.create_rectangle(
                 0, header_height - 3, w, header_height,
                 fill=AERO["accent"], outline="", tags="aero_underline")
-            # Keep the AI-assistant button pinned to the top-right corner.
-            btn_win = getattr(self, "_agent_btn_win", None)
-            if btn_win is not None:
-                try:
-                    header_canvas.coords(btn_win, w - 18, header_height // 2)
-                except Exception:
-                    pass
+            # Keep the AI-assistant launcher (icon + label) pinned to the
+            # top-right corner.
+            self._place_agent_launcher(w)
             # Re-raise the foreground (logo + titles) above the freshly
             # painted background so the repaint on resize doesn't bury them.
             try:
@@ -11382,27 +11378,36 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # "Assistant (chat)…" and Ctrl+/). Embedded as a canvas window item so
         # it floats over the glossy header; _paint_header keeps it anchored to
         # the right edge on every resize.
-        self._agent_btn = tk.Button(
-            header_canvas, text="  AI Assistant",
-            font=("Segoe UI", 11, "bold"), compound="left",
-            fg="#FFFFFF", bg=AERO["accent_dark"],
-            activebackground=AERO["accent"], activeforeground="#FFFFFF",
-            relief="flat", bd=0, padx=14, pady=6, cursor="hand2",
-            highlightthickness=0, command=self._toggle_chat_sidebar)
-        # Branded chatbot icon (speech bubble + DNA helix + AI sparkle) with a
-        # gentle bob/wiggle so the launcher reads as the live way into the agent.
-        self._build_agent_icon_frames(size=26)
+        # Frameless launcher: the branded chatbot icon (speech bubble + DNA
+        # helix + AI sparkle) and the "AI Assistant" label are drawn straight
+        # onto the header gradient as canvas items — no button widget, so there
+        # is no box, just the moving icon + text. _paint_header re-anchors them
+        # to the right edge on resize; the icon bobs/wobbles via an after timer.
+        self._agent_header_canvas = header_canvas
+        self._build_agent_icon_frames(size=30)
+        cy = header_height // 2
+        self._agent_text_item = header_canvas.create_text(
+            0, cy, text="AI Assistant", anchor="e",
+            font=("Segoe UI", 12, "bold"), fill=AERO["accent_dark"],
+            tags=("aero_header_fg", "agent_launcher"))
+        self._agent_icon_item = header_canvas.create_image(
+            0, cy, anchor="e", tags=("aero_header_fg", "agent_launcher"))
         if self._agent_icon_frames:
-            self._agent_btn.config(image=self._agent_icon_frames[0])
-        else:
-            self._agent_btn.config(text="\U0001F916  AI Assistant")
-        self._agent_btn.bind(
-            "<Enter>", lambda e: self._agent_btn.config(bg=AERO["accent"]))
-        self._agent_btn.bind(
-            "<Leave>", lambda e: self._agent_btn.config(bg=AERO["accent_dark"]))
-        self._agent_btn_win = header_canvas.create_window(
-            (self.winfo_width() or 1200) - 18, header_height // 2,
-            anchor="e", window=self._agent_btn, tags="aero_header_fg")
+            header_canvas.itemconfig(self._agent_icon_item,
+                                     image=self._agent_icon_frames[0])
+        self._place_agent_launcher(self.winfo_width() or 1200)
+        header_canvas.tag_bind("agent_launcher", "<Button-1>",
+                               lambda e: self._toggle_chat_sidebar())
+        header_canvas.tag_bind(
+            "agent_launcher", "<Enter>",
+            lambda e: (header_canvas.itemconfig(self._agent_text_item,
+                                                fill=AERO["accent"]),
+                       header_canvas.config(cursor="hand2")))
+        header_canvas.tag_bind(
+            "agent_launcher", "<Leave>",
+            lambda e: (header_canvas.itemconfig(self._agent_text_item,
+                                                fill=AERO["accent_dark"]),
+                       header_canvas.config(cursor="")))
         self._start_agent_icon_anim()
 
         status_frame = ttk.Frame(self)
@@ -19572,21 +19577,40 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         except Exception:
             self._agent_icon_frames = []
 
+    def _place_agent_launcher(self, w):
+        """Pin the frameless AI-Assistant launcher (label + bobbing icon) to
+        the header's right edge; the icon sits just left of the label."""
+        cv = getattr(self, "_agent_header_canvas", None)
+        txt = getattr(self, "_agent_text_item", None)
+        ico = getattr(self, "_agent_icon_item", None)
+        if cv is None or txt is None:
+            return
+        try:
+            cy = int(cv.coords(txt)[1]) if cv.coords(txt) else 20
+            cv.coords(txt, w - 18, cy)          # label right-aligned to the edge
+            if ico is not None:
+                x0 = cv.bbox(txt)[0]            # left x of the label
+                cv.coords(ico, x0 - 8, cy)     # icon abuts the label, right-anchored
+        except Exception:
+            pass
+
     def _start_agent_icon_anim(self):
         """Cycle the AI-Assistant icon frames on a repeating ``after`` timer."""
         frames = getattr(self, "_agent_icon_frames", None)
-        btn = getattr(self, "_agent_btn", None)
-        if not frames or btn is None:
+        cv = getattr(self, "_agent_header_canvas", None)
+        ico = getattr(self, "_agent_icon_item", None)
+        if not frames or cv is None or ico is None:
             return
 
         def _tick():
-            b = getattr(self, "_agent_btn", None)
+            c = getattr(self, "_agent_header_canvas", None)
+            it = getattr(self, "_agent_icon_item", None)
             fr = getattr(self, "_agent_icon_frames", None)
-            if not fr or b is None or not b.winfo_exists():
+            if not fr or c is None or it is None or not c.winfo_exists():
                 return
             self._agent_icon_i = (self._agent_icon_i + 1) % len(fr)
             try:
-                b.config(image=fr[self._agent_icon_i])
+                c.itemconfig(it, image=fr[self._agent_icon_i])
             except Exception:
                 return
             self._agent_icon_after = self.after(90, _tick)
