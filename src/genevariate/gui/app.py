@@ -2620,7 +2620,7 @@ def _detect_ollama_model():
 
 _OLLAMA_MODEL = None  # cached (collapse model: gemma4:e2b)
 _OLLAMA_EXTRACTION_MODEL = None  # cached (fast extraction model: gemma4:e2b)
-_OLLAMA_URL = "http://localhost:11434"
+_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
 def _detect_extraction_model():
@@ -10203,6 +10203,21 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                   background=[('active', AERO["hover_sky"]),
                               ('pressed', AERO["pressed_sky"])])
 
+        # ── Rounded "pill" restyle (CopilotKit-inspired capsules) ──────────
+        # ttk's clam theme paints square-cornered buttons. We overlay each
+        # named style with a 9-slice, PIL-rendered rounded-capsule image so
+        # every existing ttk.Button becomes a smooth pill — no call-site
+        # changes. Semantic colors + hover/pressed states are preserved.
+        # Wrapped in try/except: if imaging is unavailable the app simply
+        # keeps the original (square) styles.
+        try:
+            self._install_pill_button_styles(style)
+        except Exception as _pill_err:  # pragma: no cover - visual nicety only
+            try:
+                print(f"[UI] pill-button restyle skipped: {_pill_err}")
+            except Exception:
+                pass
+
         # ── Entries / comboboxes ─────────────────────────────────
         style.configure("TEntry",
                         fieldbackground="#FFFFFF",
@@ -10311,7 +10326,110 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         style.map("Treeview",
                   background=[('selected', AERO["accent_light"])],
                   foreground=[('selected', AERO["accent_dark"])])
-    
+
+    def _install_pill_button_styles(self, style):
+        """Re-skin the named ttk button styles as rounded capsule 'pills'.
+
+        ttk's clam theme paints square corners. We render anti-aliased
+        rounded-rectangle images with PIL and register them as horizontal
+        9-slice ttk image elements (rounded left/right caps stay fixed, the
+        middle stretches), so every existing ``ttk.Button`` keeps its semantic
+        color + hover/pressed states but gains fully rounded corners in the
+        style of the CopilotKit capsule buttons. Generated PhotoImages are
+        retained on ``self`` so Tk cannot garbage-collect them.
+        """
+        from PIL import Image, ImageDraw, ImageTk
+
+        self._pill_imgs = getattr(self, "_pill_imgs", [])
+
+        def _clamp(v):
+            return max(0, min(255, int(v)))
+
+        def _shade(hex_color, factor):
+            """factor < 1 darkens, > 1 lightens; returns an (r, g, b) tuple."""
+            h = hex_color.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return (_clamp(r * factor), _clamp(g * factor), _clamp(b * factor))
+
+        def _rgba(hex_color, a=255):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), a)
+
+        def _pill_image(h, fill_hex, radius, border_rgb=None, border_px=0):
+            """Horizontal 9-slice rounded rect. Returns (photo, cap).
+
+            ``radius`` is the corner radius in px (capped at h/2). The left/right
+            fixed 9-slice caps equal that radius, so the child label is inset by
+            only ~radius on each side — keeping room for text on narrow buttons.
+            """
+            ss = 4  # supersample for smooth anti-aliased edges
+            cap = max(2, min(int(radius), h // 2))   # fixed left/right slice
+            w = 2 * cap + 8                          # caps + ~8px stretch center
+            W, H = w * ss, h * ss
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            outline = (_rgba('%02x%02x%02x' % border_rgb)
+                       if border_rgb else None)
+            d.rounded_rectangle([0, 0, W - 1, H - 1], radius=cap * ss,
+                                fill=_rgba(fill_hex), outline=outline,
+                                width=(border_px * ss if border_rgb else 0))
+            img = img.resize((w, h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._pill_imgs.append(photo)
+            return photo, cap
+
+        def _skin(name, fill, fg, hover, pressed, font, pad_x, h, border=True):
+            rad = h // 2              # full capsule (pill), like the reference
+            edge = _shade(fill, 0.82) if border else None
+            normal_img, cap = _pill_image(h, fill, rad, edge, 1 if border else 0)
+            hover_img, _ = _pill_image(h, hover, rad,
+                                       _shade(hover, 0.82) if border else None,
+                                       1 if border else 0)
+            press_img, _ = _pill_image(h, pressed, rad, None, 0)
+            dis_fill = AERO["border_soft"]
+            dis_img, _ = _pill_image(h, dis_fill, rad, _shade(dis_fill, 0.9), 1)
+            elem = "pill_" + name.replace('.', '_')
+            try:
+                style.element_create(
+                    elem, "image", normal_img,
+                    ("pressed", press_img),
+                    ("active", hover_img),
+                    ("disabled", dis_img),
+                    border=(cap, 0, cap, 0), sticky="nsew", height=h)
+            except Exception:
+                return  # element exists already / imaging unsupported -> keep square
+            style.layout(name, [
+                (elem, {"sticky": "nsew", "children": [
+                    ("Button.padding", {"sticky": "nsew", "children": [
+                        ("Button.label", {"sticky": "nsew"})]})]})])
+            style.configure(name, font=font, foreground=fg,
+                            padding=(max(2, pad_x), 2),
+                            anchor="center", relief="flat", borderwidth=0)
+            style.map(name, foreground=[('disabled', AERO["muted"]),
+                                        ('pressed', '#FFFFFF')])
+
+        A = AERO
+        # pad_x is EXTRA inset beyond the ~13px rounded caps; the tool-row styles
+        # (Tool/ToolGreen/ToolWarn) share 6 equal narrow columns, so keep theirs
+        # small to preserve room for the long labels.
+        # (style, fill, fg, hover, pressed, font, pad_x, height, border)
+        specs = [
+            ("TButton",            A["glass_hilite"], A["text"],        A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 10),         12, 32, True),
+            ("Add.TButton",        A["green_light"],  A["green_dark"],  "#A5D6A7",      "#81C784",         ('Segoe UI', 11, 'bold'), 16, 38, True),
+            ("Action.TButton",     A["accent_light"], A["accent_dark"], A["sky_top"],   A["accent"],       ('Segoe UI', 10, 'bold'), 16, 38, True),
+            ("Primary.TButton",    A["accent"],       "#FFFFFF",        A["sky_top"],   A["accent_dark"],  ('Segoe UI', 10, 'bold'), 18, 36, False),
+            ("Secondary.TButton",  A["panel_bot"],    A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 10),         14, 32, True),
+            ("Destructive.TButton", "#F7DCDA",        A["danger"],      "#F1B5AF",      A["danger_hover"], ('Segoe UI', 10, 'bold'), 14, 32, True),
+            ("Warn.TButton",       "#FFE7D1",         "#9A4A06",        "#F7C08A",      "#D35400",         ('Segoe UI', 10, 'bold'), 14, 32, True),
+            ("Tool.TButton",       A["accent_light"], A["accent_dark"], A["sky_top"],   A["accent"],       ('Segoe UI', 9, 'bold'),   2, 34, True),
+            ("ToolGreen.TButton",  A["green_light"],  A["green_dark"],  "#A5D6A7",      A["green_dark"],   ('Segoe UI', 9, 'bold'),   2, 34, True),
+            ("ToolWarn.TButton",   "#FFE7D1",         "#9A4A06",        "#F7C08A",      "#D35400",         ('Segoe UI', 9, 'bold'),   2, 34, True),
+            ("Toggle.TButton",     A["panel_bot"],    A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 9, 'bold'),   8, 26, True),
+            ("Ghost.TButton",      A["bg_top"],       A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 9),           8, 26, True),
+        ]
+        for spec in specs:
+            _skin(*spec)
+
     def _load_persistent_cache(self):
         """Load GSE context cache from disk (survives restarts).
         Checks new path first, falls back to old agent_memory/ location."""
