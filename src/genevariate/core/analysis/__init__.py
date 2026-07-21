@@ -2,7 +2,7 @@
 
 Submodules are imported **lazily** (PEP 562): accessing a public symbol imports
 only the submodule that provides it, so the heavy, optional dependencies some of
-them carry — ``pydeseq2``/``torch`` (rnaseq), ``decoupler`` (activity),
+them carry — ``decoupler`` (activity),
 ``inmoose``/``harmonypy`` (integration) — are pulled into memory only when a
 feature that needs them is actually used. Importing ``genevariate.core.analysis``
 (or a light path such as enrichment or bimodality) no longer drags the GPU/tensor
@@ -40,13 +40,6 @@ _EXPORTS = {
     "cohort_summary": "pseudo_cohorts",
     "cohort_pairs": "pseudo_cohorts",
     "PseudoCohortResult": "pseudo_cohorts",
-    # rnaseq (pydeseq2/torch — loaded only when run_deseq2 is called)
-    "compute_qc_metrics": "rnaseq",
-    "cpm_normalize": "rnaseq",
-    "deseq2_size_factors": "rnaseq",
-    "run_deseq2": "rnaseq",
-    "deseq_results_to_ranked": "rnaseq",
-    "counts_to_platform_df": "rnaseq",
     # cross-modality
     "infer_modality": "cross_modality",
     "harmonize_vectors": "cross_modality",

@@ -293,89 +293,6 @@ def build_registry(app) -> Dict[str, Tool]:
             f"Top-ranked genes ({case} vs {control}) on {resolved.get('platform')}.",
             table=ranked.head(25), payload={"ranked": ranked})
 
-    # ---- run_ngs_de (raw counts -> DESeq2 -> GSEA) --------------
-    def _ngs_resolver(app, raw):
-        out = dict(raw)
-        out.setdefault("libraries", libs_default)
-        out.setdefault("min_count", 10)
-        return out
-
-    def _ngs_exec(app, resolved, progress_cb):
-        import os
-        from genevariate.core.count_io import load_counts
-        from genevariate.core.analysis import (
-            run_deseq2, deseq_results_to_ranked,
-        )
-        path = resolved.get("counts_path")
-        if not path:
-            return ToolResult("counts_path is required (CSV, 10x dir, or h5ad).",
-                              ok=False)
-        if not os.path.exists(path):
-            return ToolResult(f"Count file not found: {path!r}. Provide a valid "
-                              "CSV/TSV, 10x directory, or .h5ad path.", ok=False)
-        column = resolved.get("condition_column")
-        case = resolved.get("case_label")
-        control = resolved.get("control_label")
-        if not (column and case and control):
-            return ToolResult(
-                "condition_column, case_label and control_label are required "
-                "for DESeq2.", ok=False)
-        progress_cb(15.0, "Loading counts…")
-        try:
-            counts, meta = load_counts(path)
-        except Exception as exc:
-            return ToolResult(f"Could not read counts from {path!r}: {exc}",
-                              ok=False)
-        if meta is None or column not in meta.columns:
-            return ToolResult(
-                f"Sample metadata has no column {column!r}; DESeq2 needs a "
-                "design factor from the count file's metadata.", ok=False)
-        progress_cb(45.0, "Running DESeq2…")
-        res = run_deseq2(counts, meta, (column, str(case), str(control)),
-                         min_count=int(resolved.get("min_count", 10)))
-        progress_cb(75.0, "Ranking + GSEA…")
-        ranked = deseq_results_to_ranked(res)
-        libs = [s.strip() for s in str(resolved.get("libraries", libs_default)).split(",")
-                if s.strip()]
-        gsea = run_prerank_gsea(ranked, gene_sets=libs)
-        n = _gsea_term_count(gsea)
-
-        # Optionally publish log-CPM-normalised counts as a platform so the NGS
-        # result becomes a modality you can compare / connect against the others.
-        registered = None
-        register_as = str(resolved.get("register_as") or "").strip()
-        if register_as:
-            from genevariate.core.analysis import (
-                cpm_normalize, counts_to_platform_df,
-            )
-            progress_cb(90.0, f"Registering {register_as} as a platform…")
-            norm = cpm_normalize(counts, log=True)
-            meta2 = meta.copy()
-            if column in meta2.columns:
-                meta2 = meta2.rename(columns={column: f"Classified_{column}"})
-            plat_df = counts_to_platform_df(norm, sample_meta=meta2)
-            key = (register_as if register_as not in _platforms(app)
-                   else f"{register_as}_{len(_platforms(app))}")
-            app.gpl_datasets[key] = plat_df
-            registered = key
-            try:
-                app.after(0, app._update_platform_status)
-            except Exception:
-                pass
-
-        extra = f" Registered normalised counts as platform {registered!r}." \
-            if registered else ""
-        manifest = _manifest("run_ngs_de", resolved,
-                             inputs={"counts": path}, seed=42)
-        report = _append_manifest("", manifest)
-        return ToolResult(
-            f"DESeq2 DE + GSEA ({case} vs {control}): {len(res)} genes tested, "
-            f"{n} enriched term(s).{extra}",
-            table=(gsea.head(15) if n else ranked.head(15)),
-            report=report, manifest=manifest,
-            payload={"deseq": res, "ranked": ranked, "gsea": gsea,
-                     "registered": registered})
-
     # ---- classify_distributions (modality landscape) ------------
     def _modality_resolver(app, raw):
         out = dict(raw)
@@ -556,30 +473,6 @@ def build_registry(app) -> Dict[str, Tool]:
         resolver=_cond_resolver, executor=_rank_exec,
         examples=("rank genes tumor vs normal", "top differential genes",
                   "which genes change case vs control"))
-
-    tools["run_ngs_de"] = Tool(
-        name="run_ngs_de",
-        description="DESeq2 differential expression on a raw-count file, then GSEA.",
-        params=[
-            ToolParam("counts_path", "str",
-                      help="Path to counts CSV/TSV, 10x dir, or .h5ad."),
-            ToolParam("condition_column", "str",
-                      help="Design factor column in the count metadata."),
-            ToolParam("case_label", "str", help="Test level."),
-            ToolParam("control_label", "str", help="Reference level."),
-            ToolParam("libraries", "str", required=False, default=libs_default,
-                      help="Comma-separated gene-set libraries."),
-            ToolParam("min_count", "int", required=False, default=10,
-                      help="Drop genes with total count below this."),
-            ToolParam("register_as", "str", required=False,
-                      help="If set, publish log-CPM counts under this platform "
-                           "name so the NGS result can be compared/connected "
-                           "against other modalities."),
-        ],
-        resolver=_ngs_resolver, executor=_ngs_exec,
-        examples=("run deseq2 on counts.csv treated vs control",
-                  "ngs differential expression from h5ad",
-                  "raw count rna-seq de"))
 
     tools["classify_distributions"] = Tool(
         name="classify_distributions",

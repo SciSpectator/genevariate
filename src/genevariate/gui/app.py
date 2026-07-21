@@ -10388,14 +10388,19 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
             self._pill_imgs.append(photo)
             return photo, cap
 
-        def _skin(name, fill, fg, hover, pressed, font, pad_x, h, border=True):
-            rad = h // 2              # full capsule (pill), like the reference
-            edge = _shade(fill, 0.82) if border else None
-            normal_img, cap = _pill_image(h, fill, rad, edge, 1 if border else 0)
-            hover_img, _ = _pill_image(h, hover, rad,
-                                       _shade(hover, 0.82) if border else None,
-                                       1 if border else 0)
-            press_img, _ = _pill_image(h, pressed, rad, None, 0)
+        def _hex_rgb(hex_color):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+        def _skin(name, fill, fg, edge, hover, pressed, font, pad_x, h):
+            """Outline-pill skin: light fill + thin coloured border + coloured
+            text (matches the reference 'Refresh' capsule). ``edge``/``fg`` carry
+            the semantic colour; the fill stays light so the text/border read."""
+            rad = h // 2                       # full capsule
+            edge_rgb = _hex_rgb(edge)
+            normal_img, cap = _pill_image(h, fill, rad, edge_rgb, 1)
+            hover_img, _ = _pill_image(h, hover, rad, edge_rgb, 1)
+            press_img, _ = _pill_image(h, pressed, rad, edge_rgb, 1)
             dis_fill = AERO["border_soft"]
             dis_img, _ = _pill_image(h, dis_fill, rad, _shade(dis_fill, 0.9), 1)
             elem = "pill_" + name.replace('.', '_')
@@ -10412,30 +10417,43 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                 (elem, {"sticky": "nsew", "children": [
                     ("Button.padding", {"sticky": "nsew", "children": [
                         ("Button.label", {"sticky": "nsew"})]})]})])
-            style.configure(name, font=font, foreground=fg,
-                            padding=(max(2, pad_x), 2),
+            # Reset the leftover solid ``background`` from the base style so no
+            # square colour band shows through the pill's transparent corners —
+            # the capsule floats directly on the container colour.
+            bg = AERO["bg_top"]
+            style.configure(name, font=font, foreground=fg, background=bg,
+                            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                            focuscolor=bg, padding=(max(2, pad_x), 2),
                             anchor="center", relief="flat", borderwidth=0)
-            style.map(name, foreground=[('disabled', AERO["muted"]),
-                                        ('pressed', '#FFFFFF')])
+            # Outline style keeps coloured text in every state (never white);
+            # background stays the container colour so the corners never fill.
+            style.map(name,
+                      foreground=[('disabled', AERO["muted"]),
+                                  ('pressed', fg), ('active', fg)],
+                      background=[('disabled', bg), ('pressed', bg),
+                                  ('active', bg), ('!active', bg)],
+                      bordercolor=[('focus', bg), ('active', bg)],
+                      lightcolor=[('pressed', bg), ('active', bg)],
+                      darkcolor=[('pressed', bg), ('active', bg)])
 
         A = AERO
-        # pad_x is EXTRA inset beyond the ~13px rounded caps; the tool-row styles
-        # (Tool/ToolGreen/ToolWarn) share 6 equal narrow columns, so keep theirs
-        # small to preserve room for the long labels.
-        # (style, fill, fg, hover, pressed, font, pad_x, height, border)
+        WHITE = "#FFFFFF"
+        # Outline-pill palette (blue/green as before): white fill, coloured
+        # border + coloured text; hover/pressed are faint tints of that colour.
+        # (style, fill, fg/text, border, hover, pressed, font, pad_x, height)
         specs = [
-            ("TButton",            A["glass_hilite"], A["text"],        A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 10),         12, 32, True),
-            ("Add.TButton",        A["green_light"],  A["green_dark"],  "#A5D6A7",      "#81C784",         ('Segoe UI', 11, 'bold'), 16, 38, True),
-            ("Action.TButton",     A["accent_light"], A["accent_dark"], A["sky_top"],   A["accent"],       ('Segoe UI', 10, 'bold'), 16, 38, True),
-            ("Primary.TButton",    A["accent"],       "#FFFFFF",        A["sky_top"],   A["accent_dark"],  ('Segoe UI', 10, 'bold'), 18, 36, False),
-            ("Secondary.TButton",  A["panel_bot"],    A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 10),         14, 32, True),
-            ("Destructive.TButton", "#F7DCDA",        A["danger"],      "#F1B5AF",      A["danger_hover"], ('Segoe UI', 10, 'bold'), 14, 32, True),
-            ("Warn.TButton",       "#FFE7D1",         "#9A4A06",        "#F7C08A",      "#D35400",         ('Segoe UI', 10, 'bold'), 14, 32, True),
-            ("Tool.TButton",       A["accent_light"], A["accent_dark"], A["sky_top"],   A["accent"],       ('Segoe UI', 9, 'bold'),   2, 34, True),
-            ("ToolGreen.TButton",  A["green_light"],  A["green_dark"],  "#A5D6A7",      A["green_dark"],   ('Segoe UI', 9, 'bold'),   2, 34, True),
-            ("ToolWarn.TButton",   "#FFE7D1",         "#9A4A06",        "#F7C08A",      "#D35400",         ('Segoe UI', 9, 'bold'),   2, 34, True),
-            ("Toggle.TButton",     A["panel_bot"],    A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 9, 'bold'),   8, 26, True),
-            ("Ghost.TButton",      A["bg_top"],       A["accent_dark"], A["hover_sky"], A["pressed_sky"],  ('Segoe UI', 9),           8, 26, True),
+            ("TButton",             WHITE, A["accent_dark"], A["border"],  A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10),         12, 32),
+            ("Add.TButton",         WHITE, A["green_dark"],  A["green"],    A["green_light"], "#B8E6B6",      ('Segoe UI', 11, 'bold'), 16, 38),
+            ("Action.TButton",      WHITE, A["accent_dark"], A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10, 'bold'), 16, 38),
+            ("Primary.TButton",     WHITE, A["accent"],      A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10, 'bold'), 18, 36),
+            ("Secondary.TButton",   WHITE, A["accent_dark"], A["border"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10),         14, 32),
+            ("Destructive.TButton", WHITE, A["danger"],      A["danger"],   "#FBE9E7",      "#F5CDC8",        ('Segoe UI', 10, 'bold'), 14, 32),
+            ("Warn.TButton",        WHITE, "#9A4A06",        A["warn"],     "#FDF0E4",      "#F7DFC6",        ('Segoe UI', 10, 'bold'), 14, 32),
+            ("Tool.TButton",        WHITE, A["accent_dark"], A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9, 'bold'),   2, 34),
+            ("ToolGreen.TButton",   WHITE, A["green_dark"],  A["green"],    A["green_light"], "#B8E6B6",      ('Segoe UI', 9, 'bold'),   2, 34),
+            ("ToolWarn.TButton",    WHITE, "#9A4A06",        A["warn"],     "#FDF0E4",      "#F7DFC6",        ('Segoe UI', 9, 'bold'),   2, 34),
+            ("Toggle.TButton",      WHITE, A["accent_dark"], A["border"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9, 'bold'),   8, 26),
+            ("Ghost.TButton",       WHITE, A["accent_dark"], A["border_soft"], A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9),       8, 26),
         ]
         for spec in specs:
             _skin(*spec)
@@ -10726,8 +10744,6 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                               command=self._open_enrichment_window)
         tools_menu.add_command(label="Discover Pseudo-Cohorts (embeddings)...",
                               command=self._open_pseudo_cohorts_window)
-        tools_menu.add_command(label="RNA-seq DE (NGS counts)...",
-                              command=self._open_rnaseq_de)
         tools_menu.add_command(label="Activity Inference (TF / pathway)...",
                               command=self._open_activity_inference)
         tools_menu.add_separator()
@@ -11486,7 +11502,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         tools_btn_frame = ttk.Frame(tools_frame)
         tools_btn_frame.pack(fill=tk.X, pady=4)
-        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="toolbtn")
+        tools_btn_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="toolbtn")
 
         self.gene_explorer_btn = ttk.Button(
             tools_btn_frame, text="Gene Distribution Explorer",
@@ -11522,17 +11538,6 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                           "Browse and fetch single-cell RNA-seq data from the CELLxGENE Discover Census "
                           "(real public scRNA-seq submissions). Pseudo-bulk the result to use it in every other window, "
                           "or open cell-level plots (composition / UMAP / dot plot / QC).")
-
-        self.rnaseq_de_btn = ttk.Button(
-            tools_btn_frame, text="RNA-seq DE (NGS counts)",
-            command=self._open_rnaseq_de,
-            style="ToolGreen.TButton")
-        self.rnaseq_de_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.rnaseq_de_btn,
-                          "Load a raw count matrix (CSV / 10x MTX / h5ad), run QC + DESeq2 "
-                          "differential expression, then GSEA. Register the normalised matrix "
-                          "as a platform to use it in every other window. Needs pip install "
-                          "genevariate[rnaseq].")
 
         # ── Label Source (inside tools_frame - always visible) ──────
         ttk.Separator(tools_frame, orient='horizontal').pack(fill=tk.X, pady=(8, 4))
@@ -19503,27 +19508,6 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             messagebox.showerror(
                 "Single-cell (CELLxGENE)",
                 f"Could not open CELLxGENE browser:\n{exc}",
-                parent=self,
-            )
-
-    def _open_rnaseq_de(self):
-        """Open the RNA-seq differential-expression window (raw counts).
-
-        Loads a raw count matrix (CSV / 10x MTX dir / h5ad), runs QC +
-        DESeq2 median-of-ratios normalisation + negative-binomial DE
-        (pydeseq2) + GSEA, and can register the normalised matrix as a
-        platform in ``self.gpl_datasets``. Import-guarded so the app still
-        launches without the ``rnaseq`` extra installed.
-        """
-        try:
-            from genevariate.gui.windows.rnaseq_de import RnaSeqDEWindow
-            RnaSeqDEWindow(self)
-        except Exception as exc:
-            import traceback
-            traceback.print_exc()
-            messagebox.showerror(
-                "RNA-seq DE (NGS counts)",
-                f"Could not open the RNA-seq DE window:\n{exc}",
                 parent=self,
             )
 

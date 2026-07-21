@@ -73,12 +73,6 @@ llm-extract = [
     "torch>=1.11",
     "transformers>=4.21",
 ]
-# For the empirical Bayes moderated t-statistic and RNA-seq DE
-# (raw counts -> QC -> DESeq2 -> GSEA; anndata enables the .h5ad count path)
-rnaseq = [
-    "pydeseq2>=0.4",
-    "anndata>=0.9",
-]
 # LangChain reasoning agent with a pluggable backend (GENEVARIATE_AGENT_BACKEND:
 # groq [default] | ollama | openai-compatible). The app auto-installs the base
 # stack + the chosen backend client on first use, so this extra is only for
@@ -95,7 +89,7 @@ dev = [
     "mypy>=1.8",
 ]
 all = [
-    "genevariate[analysis,bimodality,activity,integration,rnaseq,agent,llm-extract,dev]",
+    "genevariate[analysis,bimodality,activity,integration,agent,llm-extract,dev]",
 ]
 
 [project.scripts]

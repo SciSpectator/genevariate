@@ -44,7 +44,7 @@ def _ollama_off(monkeypatch):
 def test_registry_has_core_tools():
     reg = build_registry(FakeApp())
     for name in ("list_platforms", "condition_enrichment",
-                 "variability_enrichment", "rank_genes", "run_ngs_de",
+                 "variability_enrichment", "rank_genes",
                  "classify_distributions", "meta_enrichment",
                  "gene_distribution", "compare_gene",
                  "compare_modalities", "gene_connections",
@@ -209,13 +209,6 @@ def test_keyword_extracts_multiple_platforms_for_compare():
     assert a.params.get("platforms") == ["GPL570", "GPL96"]
 
 
-def test_keyword_route_ngs_path():
-    reg = build_registry(FakeApp())
-    action = route("run deseq2 on data/counts.csv treated vs control", reg)
-    assert action.tool == "run_ngs_de"
-    assert action.params.get("counts_path") == "data/counts.csv"
-
-
 def test_llm_route_valid_json(monkeypatch):
     reg = build_registry(FakeApp())
     import genevariate.core.ollama_manager as om
@@ -301,19 +294,6 @@ def test_gene_distribution_tool_reports():
     assert "G0" in result.report
 
 
-def test_run_ngs_de_missing_file_is_graceful():
-    """A non-existent count path must return ok=False, never raise."""
-    app = FakeApp()
-    reg = build_registry(app)
-    tool = reg["run_ngs_de"]
-    resolved = tool.coerce(tool.resolver(app, {
-        "counts_path": "/tmp/gv_does_not_exist_1234.csv",
-        "condition_column": "cond", "case_label": "a", "control_label": "b"}))
-    result = tool.executor(app, resolved, lambda v, t: None)
-    assert result.ok is False
-    assert "not found" in result.summary.lower()
-
-
 def test_planner_reads_gene_not_verb():
     """The offline planner must not read the word 'load' as gene 'LOAD'."""
     from genevariate.core.chatbot import agent as agent_mod
@@ -335,12 +315,12 @@ def test_find_leaked_tool_call_parses_llama_native_format():
     from genevariate.core.chatbot.langchain_agent import _find_leaked_tool_call
     # both '/' and '=' separators, with surrounding prose
     a = _find_leaked_tool_call(
-        'Sure. <function/run_ngs_de>{"counts_path": "/tmp/c.csv", '
+        'Sure. <function/condition_enrichment>{"platform": "GPL570", '
         '"case_label": "treated", "control_label": "control"}</function>')
     assert a is not None
     name, params = a
-    assert name == "run_ngs_de"
-    assert params["counts_path"] == "/tmp/c.csv"
+    assert name == "condition_enrichment"
+    assert params["platform"] == "GPL570"
     b = _find_leaked_tool_call(
         '<function=list_platforms>{}</function>')
     assert b is not None and b[0] == "list_platforms" and b[1] == {}

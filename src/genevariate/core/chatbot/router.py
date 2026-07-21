@@ -175,11 +175,6 @@ def _extract_keyword_params(prompt: str, tool: Tool) -> Dict[str, Any]:
             params["platforms"] = list(dict.fromkeys(plats))
         elif "platform" in names:
             params["platform"] = plats[0]
-    # a bare path for the NGS tool
-    if "counts_path" in names:
-        pm = re.search(r"(\S+\.(?:csv|tsv|h5ad|txt|gz))", prompt, re.IGNORECASE)
-        if pm:
-            params["counts_path"] = pm.group(1)
     return tool.coerce(params)
 
 

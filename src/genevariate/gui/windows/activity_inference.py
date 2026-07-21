@@ -7,8 +7,8 @@ main toolbar button). Pick a loaded platform, choose TF or pathway activity, and
 score each sample with decoupleR's ULM. Results render as a ranked table + a
 markdown report.
 
-Structure mirrors ``gui/windows/rnaseq_de.py``: lazy ``_try_import`` with a
-``_render_missing_deps`` fallback (decoupler is optional), and a worker thread
+Structure mirrors ``gui/windows/cellxgene_browser.py``: lazy ``_try_import`` with
+a ``_render_missing_deps`` fallback (decoupler is optional), and a worker thread
 that marshals UI updates via ``self.after(0, ...)`` and drives the shared
 progress bar through the app's ``_acquire_progress`` / ``update_progress`` /
 ``_release_progress`` API.

@@ -161,14 +161,14 @@ def _heuristic_plan(goal: str, app, registry: Dict[str, Tool]) -> Plan:
                           {"gene": gene, "platforms": list(produced)},
                           f"Compare {gene} across {', '.join(produced)}"))
 
-    # 4) analytical intent — enrichment / ranking / modality / meta / NGS.
+    # 4) analytical intent — enrichment / ranking / modality / meta.
     # Reuse the deterministic keyword router to pick the tool + params, then
     # target whatever platform(s) we just loaded, so an offline goal like
     # "run condition enrichment on GPL570 tumor vs normal" runs the real
     # analysis instead of degrading to a bare gene profile.
     from .router import _keyword_route
     _ANALYTIC = {"condition_enrichment", "variability_enrichment", "rank_genes",
-                 "classify_distributions", "meta_enrichment", "run_ngs_de"}
+                 "classify_distributions", "meta_enrichment"}
     if not any(s.tool in _ANALYTIC for s in steps):
         act = _keyword_route(goal, registry)
         if act.tool in _ANALYTIC and act.tool in registry:
@@ -176,7 +176,7 @@ def _heuristic_plan(goal: str, app, registry: Dict[str, Tool]) -> Plan:
             if act.tool == "meta_enrichment":
                 if not p.get("platforms") and len(produced) >= 2:
                     p["platforms"] = list(produced)
-            elif act.tool != "run_ngs_de":
+            else:
                 if not p.get("platform") and produced:
                     p["platform"] = produced[0]
             steps.append(Step(act.tool, p, f"Run {act.tool}"))

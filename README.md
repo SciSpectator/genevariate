@@ -88,7 +88,6 @@ Per-OS walkthroughs (including Docker, Windows, Homebrew) live in [INSTALL.md](I
 | GEOmetadb | Microarray catalogue | Any GPL; queried from disk on low-RAM devices |
 | ARCHS4 | Bulk RNA-seq | Uniformly-processed GEO/SRA counts via `archs4py` |
 | GEO Series (GPL) | Microarray matrices | Auto probe-to-gene mapping + quantile normalization |
-| Raw NGS counts | RNA-seq | CSV/TSV (+ optional `.meta.csv` sidecar), 10x MTX dir, or `.h5ad` → QC → DESeq2 → GSEA (`core/count_io.py`) |
 | scRNA-seq pseudobulk | Single-cell → bulk | Via the canonical loader |
 | Methylation / peaks | β-values / intensities | Normalised through the same base class |
 
@@ -110,19 +109,6 @@ downstream tool consumes them identically.
 - **Embedding-clustered pseudo-cohorts** — auto-discover case/control groups from LLM labels
 
 See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail.
-
-### NGS raw-count differential expression
-
-- **RNA-seq DE window** (Analysis Tools → *RNA-seq DE (NGS counts)*) — load a raw count
-  matrix (CSV/TSV, 10x MTX directory, or `.h5ad`), run QC (library size, genes detected,
-  %mito), DESeq2 median-of-ratios normalisation, negative-binomial DE via
-  [`pydeseq2`](https://github.com/owkin/PyDESeq2), then GSEA on the Wald statistic
-- Register the normalised matrix as a platform so every other window can reuse it — the
-  assistant's `run_ngs_de` tool takes a `register_as` name to publish log-CPM counts as a
-  **modality** you can then compare/connect against microarray and single-cell data
-- Headless API in `core/analysis/rnaseq.py` (`compute_qc_metrics`, `cpm_normalize`,
-  `deseq2_size_factors`, `run_deseq2`, `deseq_results_to_ranked`, `counts_to_platform_df`)
-- Optional extra: `pip install genevariate[rnaseq]` (pulls `pydeseq2` + `anndata`)
 
 ### Cross-modality gene analysis (`core/analysis/cross_modality.py`)
 
@@ -172,7 +158,7 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   declined it drops to the local model; if that's unavailable it falls back to a deterministic
   heuristic planner, then keyword routing — the app works either way. The offline planner
   chains data loading with the real analyses (condition/variability/meta enrichment, ranking,
-  modality, DESeq2) so agentic goals still run end-to-end without any LLM.
+  modality) so agentic goals still run end-to-end without any LLM.
 - **Optimized local inference (quantization):** the local model runs as a **quantized GGUF**
   through Ollama/llama.cpp so a 7B fits ~8 GB VRAM at roughly double the fp16 throughput.
   Pick the GGUF level with `GENEVARIATE_AGENT_QUANT` (`q4_K_M` default → `q5_K_M` → `q8_0`;
@@ -189,15 +175,11 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   modalities), `classify_distributions` (modality landscape), `condition_enrichment`,
   `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
   Stouffer / random-effects + GSEA), `activity_inference` (TF/pathway activity via decoupleR),
-  `run_analysis_code` (sandboxed Python over the loaded platforms), `rank_genes`, `run_ngs_de`.
+  `run_analysis_code` (sandboxed Python over the loaded platforms), `rank_genes`.
 - **Robust to Llama tool-call quirks:** Llama-3.x occasionally emits a tool call in its
   *native text* form (`<function=name>{…}</function>`) inside the message content instead of
-  through the structured tool-calls API — most often for the tool with the most parameters
-  (`run_ngs_de`). `run_agent` detects and executes that leaked call so the reasoning loop still
-  produces a real result.
-- **DESeq2 from a bare counts CSV:** a count matrix carries no design factor, so `load_counts`
-  auto-discovers a sibling metadata table (`<counts>.meta.csv` / `metadata.csv`, sample column
-  + condition columns) and hands it to the DESeq2 path — no h5ad required.
+  through the structured tool-calls API. `run_agent` detects and executes that leaked call so
+  the reasoning loop still produces a real result.
 - Tk-free core in `core/chatbot/` (`build_registry`, `route`, `run_agent`, `agent_available`).
 - Optional extra (pre-provision; otherwise auto-installed on first use):
   `pip install genevariate[agent]` (`langchain` + `langchain-groq` + `langchain-ollama`).
@@ -207,10 +189,10 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 - Resource-aware worker scaling (1–210 threads) driven by live CPU/RAM/VRAM/thermal metrics
 - GPU auto-detection (NVIDIA / AMD) with automatic CPU fallback
 - Lazy, pay-for-what-you-use imports: `core/analysis` loads each submodule (and its heavy
-  optional deps) only on first access via PEP 562 `__getattr__`, so the tensor stack
-  (`torch` via `pydeseq2`) and `decoupler` are pulled into memory only when DESeq2 or
-  activity inference is actually run — importing the analysis package no longer drags the
-  GPU/tensor stack in at startup (base import ≈4× faster, no CUDA init for light paths)
+  optional deps) only on first access via PEP 562 `__getattr__`, so heavy optional deps like
+  `decoupler` and the batch-integration stack are pulled into memory only when that analysis
+  is actually run — importing the analysis package no longer drags the GPU/tensor stack in at
+  startup (base import ≈4× faster, no CUDA init for light paths)
 - Low-RAM mode: GEOmetadb queried directly from disk (WAL + indexes + mmap), no OOM
 - Docker image with bundled Ollama and automatic model pulling
 
@@ -237,8 +219,6 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 |---|---|
 | `core/sources/base.py` | Canonical-format contract + shared CSV writer |
 | `core/sources/archs4.py` | ARCHS4 bulk RNA-seq ingestion |
-| `core/count_io.py` | Raw-count readers (CSV/TSV, 10x MTX, h5ad) → genes × samples |
-| `core/analysis/rnaseq.py` | QC + CPM + DESeq2 size factors/DE + GSEA bridge |
 | `core/chatbot/` | Tk-free assistant: tool registry, router, LangChain reasoning agent + heuristic planner |
 | `core/db_loader.py` | Shared GEOmetadb loader (decompress once, tier-adapted cache) |
 | `core/gpl_downloader.py` | GPL annotation download, probe-to-gene, quantile normalization |
@@ -368,15 +348,6 @@ thresholded on FDR rather than nominal p, and the random-effects meta-combiner r
 routine. Effect sizes (log-fold-change / pooled effect) are carried through unchanged so calls
 are judged on both significance *and* magnitude.
 
-### DESeq2 LFC shrinkage
-
-`run_deseq2` gains a `shrink=True` flag that applies pydeseq2's native **apeglm** shrinkage
-(`DeseqStats.lfc_shrink`) to the fitted coefficient. This pulls the magnitude of noisy,
-low-information log-fold-changes toward zero while leaving well-powered genes essentially
-untouched, giving stable effect-size estimates for ranking and GSEA. No new dependency — it
-uses the shrinkage already shipped with `pydeseq2`, and silently degrades to unshrunken LFCs if
-the coefficient name can't be resolved across pydeseq2 API versions.
-
 ### Compositional-bias-robust co-expression (proportionality ρ)
 
 Correlation on relative (compositional) abundance data is biased. `gene_coexpression` /
@@ -407,10 +378,10 @@ batch-corrected values.
 ### Per-run reproducibility manifest
 
 `core/reproducibility.py` captures four pillars for any analysis: **parameters**, **package
-versions** (numpy/pandas/scipy/pydeseq2/gseapy/…), the **random seed**, and a content-sensitive
+versions** (numpy/pandas/scipy/gseapy/…), the **random seed**, and a content-sensitive
 **SHA-256 hash** of every input DataFrame/array. `build_manifest` returns a JSON-able record
 (with environment + timestamp) and `manifest_to_markdown` renders it for the report window; the
-assistant's condition/NGS/meta tools attach a manifest so a result can be re-derived exactly.
+assistant's condition/meta tools attach a manifest so a result can be re-derived exactly.
 
 ### Sandboxed analysis code execution
 
