@@ -145,7 +145,8 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 
 ### AI analysis agent + conversational assistant
 
-- Collapsible chat sidebar (**Ctrl+/** or Tools → *Assistant*) with two modes:
+- Collapsible chat sidebar — open it from the **AI Assistant** button in the top-right corner
+  of the header, the **Ctrl+/** shortcut, or Tools → *Assistant* — with two modes:
   - **Agent** (default when the reasoning stack is available) — state a *goal* such as
     *“analyse the distribution of TP53 in single-cell and GEO data and compare them”* and a
     full **LangChain** reasoning agent decomposes it, **loads/fetches the data itself**

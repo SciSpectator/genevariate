@@ -11085,6 +11085,13 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             header_canvas.create_rectangle(
                 0, header_height - 3, w, header_height,
                 fill=AERO["accent"], outline="", tags="aero_underline")
+            # Keep the AI-assistant button pinned to the top-right corner.
+            btn_win = getattr(self, "_agent_btn_win", None)
+            if btn_win is not None:
+                try:
+                    header_canvas.coords(btn_win, w - 18, header_height // 2)
+                except Exception:
+                    pass
             # Re-raise the foreground (logo + titles) above the freshly
             # painted background so the repaint on resize doesn't bury them.
             try:
@@ -11118,6 +11125,26 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             text="Gene Expression Variability Analysis Platform",
             anchor="w", font=("Segoe UI", 10),
             fill=AERO["muted"], tags="aero_header_fg")
+
+        # ── AI assistant launcher pinned to the header's top-right corner ──
+        # Opens the conversational agent sidebar (same action as Tools ▸
+        # "Assistant (chat)…" and Ctrl+/). Embedded as a canvas window item so
+        # it floats over the glossy header; _paint_header keeps it anchored to
+        # the right edge on every resize.
+        self._agent_btn = tk.Button(
+            header_canvas, text="🤖  AI Assistant",
+            font=("Segoe UI", 11, "bold"),
+            fg="#FFFFFF", bg=AERO["accent_dark"],
+            activebackground=AERO["accent"], activeforeground="#FFFFFF",
+            relief="flat", bd=0, padx=16, pady=7, cursor="hand2",
+            highlightthickness=0, command=self._toggle_chat_sidebar)
+        self._agent_btn.bind(
+            "<Enter>", lambda e: self._agent_btn.config(bg=AERO["accent"]))
+        self._agent_btn.bind(
+            "<Leave>", lambda e: self._agent_btn.config(bg=AERO["accent_dark"]))
+        self._agent_btn_win = header_canvas.create_window(
+            (self.winfo_width() or 1200) - 18, header_height // 2,
+            anchor="e", window=self._agent_btn, tags="aero_header_fg")
 
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=5, pady=2)
