@@ -11383,12 +11383,19 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # it floats over the glossy header; _paint_header keeps it anchored to
         # the right edge on every resize.
         self._agent_btn = tk.Button(
-            header_canvas, text="🤖  AI Assistant",
-            font=("Segoe UI", 11, "bold"),
+            header_canvas, text="  AI Assistant",
+            font=("Segoe UI", 11, "bold"), compound="left",
             fg="#FFFFFF", bg=AERO["accent_dark"],
             activebackground=AERO["accent"], activeforeground="#FFFFFF",
-            relief="flat", bd=0, padx=16, pady=7, cursor="hand2",
+            relief="flat", bd=0, padx=14, pady=6, cursor="hand2",
             highlightthickness=0, command=self._toggle_chat_sidebar)
+        # Branded chatbot icon (speech bubble + DNA helix + AI sparkle) with a
+        # gentle bob/wiggle so the launcher reads as the live way into the agent.
+        self._build_agent_icon_frames(size=26)
+        if self._agent_icon_frames:
+            self._agent_btn.config(image=self._agent_icon_frames[0])
+        else:
+            self._agent_btn.config(text="\U0001F916  AI Assistant")
         self._agent_btn.bind(
             "<Enter>", lambda e: self._agent_btn.config(bg=AERO["accent"]))
         self._agent_btn.bind(
@@ -11396,6 +11403,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._agent_btn_win = header_canvas.create_window(
             (self.winfo_width() or 1200) - 18, header_height // 2,
             anchor="e", window=self._agent_btn, tags="aero_header_fg")
+        self._start_agent_icon_anim()
 
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=5, pady=2)
@@ -19530,6 +19538,60 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 f"Could not open the Activity Inference window:\n{exc}",
                 parent=self,
             )
+
+    def _build_agent_icon_frames(self, size=26, n=24, bob=3.0, wobble=6.0):
+        """Pre-render the animation frames for the AI-Assistant launcher icon.
+
+        Loads the branded chatbot glyph (``assets/chat-filled-256.png`` — a
+        speech bubble + DNA double-helix + AI sparkle) once and bakes ``n``
+        frames of a gentle sine bob (±``bob`` px) plus a slight rotation
+        wobble (±``wobble``°). Frames are ``PhotoImage``s kept on ``self`` so
+        Tk can't garbage-collect them. Degrades to no image (text-only button)
+        if Pillow or the asset is unavailable — never raises.
+        """
+        import math
+        self._agent_icon_frames = []
+        self._agent_icon_i = 0
+        try:
+            import os
+            from PIL import Image, ImageTk
+            here = os.path.dirname(os.path.abspath(__file__))
+            path = os.path.join(here, "assets", "chat-filled-256.png")
+            base = Image.open(path).convert("RGBA").resize(
+                (size, size), Image.LANCZOS)
+            pad = int(math.ceil(bob)) + 2
+            canvas_h = size + 2 * pad
+            for k in range(n):
+                t = 2 * math.pi * k / n
+                dy = int(round(bob * math.sin(t)))
+                ang = wobble * math.sin(t)
+                rot = base.rotate(ang, resample=Image.BICUBIC, expand=False)
+                frame = Image.new("RGBA", (size, canvas_h), (0, 0, 0, 0))
+                frame.paste(rot, (0, pad + dy), rot)
+                self._agent_icon_frames.append(ImageTk.PhotoImage(frame))
+        except Exception:
+            self._agent_icon_frames = []
+
+    def _start_agent_icon_anim(self):
+        """Cycle the AI-Assistant icon frames on a repeating ``after`` timer."""
+        frames = getattr(self, "_agent_icon_frames", None)
+        btn = getattr(self, "_agent_btn", None)
+        if not frames or btn is None:
+            return
+
+        def _tick():
+            b = getattr(self, "_agent_btn", None)
+            fr = getattr(self, "_agent_icon_frames", None)
+            if not fr or b is None or not b.winfo_exists():
+                return
+            self._agent_icon_i = (self._agent_icon_i + 1) % len(fr)
+            try:
+                b.config(image=fr[self._agent_icon_i])
+            except Exception:
+                return
+            self._agent_icon_after = self.after(90, _tick)
+
+        self._agent_icon_after = self.after(90, _tick)
 
     def _toggle_chat_sidebar(self):
         """Show/hide the conversational assistant sidebar (Ctrl+/).

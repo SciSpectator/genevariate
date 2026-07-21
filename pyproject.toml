@@ -106,6 +106,7 @@ include = ["genevariate*"]
 
 [tool.setuptools.package-data]
 "genevariate.assets" = ["*"]
+"genevariate.gui" = ["assets/*"]
 "genevariate.core.llm_extractor" = ["compiled/*.json", "UPSTREAM_LICENSE"]
 
 [tool.pytest.ini_options]
