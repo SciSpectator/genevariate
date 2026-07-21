@@ -146,15 +146,17 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 ### AI analysis agent + conversational assistant
 
 - Collapsible chat sidebar — open it from the **AI Assistant** button in the top-right corner
-  of the header, the **Ctrl+/** shortcut, or Tools → *Assistant* — with two modes:
-  - **Agent** (default when the reasoning stack is available) — state a *goal* such as
-    *“analyse the distribution of TP53 in single-cell and GEO data and compare them”* and a
-    full **LangChain** reasoning agent decomposes it, **loads/fetches the data itself**
-    (GEO platforms or CELLxGENE single-cell → pseudo-bulk), runs the analysis tools, and
-    narrates its reasoning + each tool result live before writing a final answer. A **Stop**
-    button cancels between steps.
-  - **Confirm** — the classic single-tool safety path: one request routes to ONE tool and an
-    editable card shows the resolved parameters; **nothing runs until you click *Run***.
+  of the header, the **Ctrl+/** shortcut, or Tools → *Assistant*. It is **one unified window**:
+  state a *goal* such as *“analyse the distribution of TP53 in single-cell and GEO data and
+  compare them”* and a full **LangChain** reasoning agent decomposes it, **loads/fetches the
+  data itself** (GEO platforms — **auto-downloaded from GEO when not already on disk** — or
+  CELLxGENE single-cell → pseudo-bulk), runs the analysis tools, and narrates its reasoning +
+  each tool result live before writing a final answer. A **Stop** button cancels between steps.
+  When the reasoning stack isn't available it falls back to deterministic keyword routing, so
+  the assistant works either way.
+- **Results open in their own window:** the chat transcript stays short (a one-line summary per
+  step); the full **result table + markdown report** pops up in a separate, scrollable results
+  window (re-openable with *Open results window*) so the small chatbox never gets crowded.
 - **Pluggable LLM backend** (`GENEVARIATE_AGENT_BACKEND`): because the agent drives
   GeneVariate's *Python API* (not the screen), a reliable tool-caller matters more than size —
   no vision model needed.
@@ -179,8 +181,9 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   and `GENEVARIATE_AGENT_NUM_CTX` / `GENEVARIATE_AGENT_NUM_PREDICT` tune context/output length.
   Groq is a hosted LPU service and is already optimally served, so no client-side tuning applies.
 - Tools (each calls the existing analysis API rather than reimplementing it, and returns a
-  markdown **description + analysis** you can open in a scrollable *View report* window):
-  `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
+  markdown **description + analysis** shown in the separate results window):
+  `list_platforms`, `load_geo_platform` (**auto-downloads the platform from GEO** if it isn't
+  on disk, bounded by `max_gse`), `fetch_single_cell`, `gene_distribution`,
   `compare_gene`, `compare_modalities` (same gene across microarray/RNA-seq/single-cell,
   harmonised), `gene_connections` (co-expression links within a source or consensus across
   modalities), `classify_distributions` (modality landscape), `condition_enrichment`,

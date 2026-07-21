@@ -8,6 +8,7 @@ run on a worker thread and return a :class:`ToolResult`.
 """
 from __future__ import annotations
 
+import os
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -684,7 +685,12 @@ def build_registry(app) -> Dict[str, Tool]:
             plats_arg = [s.strip() for s in plats_arg.replace(";", ",").split(",")
                          if s.strip()]
         if plats_arg:
-            resolved = [_match_platform(app, p) for p in plats_arg]
+            resolved = []
+            for p in plats_arg:
+                m = _match_platform(app, p)
+                # Keep an unmatched GPL id verbatim so the executor can
+                # auto-load/download it (full automation).
+                resolved.append(m if m else str(p).strip().upper())
             out["platforms"] = [p for p in dict.fromkeys(resolved) if p]
         else:
             out["platforms"] = list(_platforms(app).keys())
@@ -699,6 +705,13 @@ def build_registry(app) -> Dict[str, Tool]:
         if len(keys) < 2:
             return ToolResult("Need at least two platforms/sources to compare. "
                               "Load or fetch them first.", ok=False)
+        # Auto-load (and download when missing) any GPL platform not yet in
+        # memory so the comparison is fully automated.
+        for key in list(keys):
+            if key not in _platforms(app) and str(key).upper().startswith("GPL"):
+                progress_cb(8.0, f"Loading {key}…")
+                _load_exec(app, {"platform": key, "download": True, "max_gse": 8},
+                           progress_cb)
         plats = _platforms(app)
         rows, vecs = [], {}
         for i, key in enumerate(keys):
@@ -907,7 +920,77 @@ def build_registry(app) -> Dict[str, Tool]:
 
     # ---- load_geo_platform (headless, no dialogs) ---------------
     def _load_resolver(app, raw):
-        return dict(raw)
+        out = dict(raw)
+        out.setdefault("download", True)
+        out.setdefault("max_gse", 8)
+        return out
+
+    def _download_platform(app, key_up, resolved, progress_cb):
+        """Auto-download a GPL from GEO when it isn't on disk.
+
+        Returns the saved CSV path (str) on success, or a failing
+        ``ToolResult`` describing why the download could not proceed.
+        """
+        gds_conn = getattr(app, "gds_conn", None)
+        data_dir = getattr(app, "data_dir", None)
+        if gds_conn is None or not data_dir:
+            return ToolResult(
+                f"No local file for {key_up} and no GEO metadata database is "
+                "open to download it. Open GEOmetadb (or add the CSV to the "
+                "data directory) and try again.", ok=False)
+        try:
+            from genevariate.core.gpl_downloader import GPLDownloader
+        except Exception as exc:
+            return ToolResult(f"GPL downloader unavailable: {exc}", ok=False)
+        try:
+            downloader = GPLDownloader(gds_conn=gds_conn, output_base_dir=data_dir)
+            downloader.check_dependencies()
+        except Exception as exc:
+            return ToolResult(
+                f"Cannot auto-download {key_up} (missing dependency): {exc}. "
+                "Install GEOparse or place the CSV in the data directory.",
+                ok=False)
+        try:
+            max_gse = int(resolved.get("max_gse") or 0)
+        except Exception:
+            max_gse = 0
+        if max_gse <= 0:
+            max_gse = 8
+
+        info = None
+        query = getattr(app, "_query_gpl_info_local", None)
+        try:
+            if callable(query):
+                info = query(key_up)
+        except Exception as exc:
+            return ToolResult(
+                f"{key_up} was not found in the GEO metadata database: {exc}",
+                ok=False)
+
+        progress_cb(20.0,
+                    f"Downloading {key_up} from GEO (up to {max_gse} series)…")
+
+        def cb(pct, stage, msg):
+            try:
+                if pct is not None:
+                    progress_cb(20.0 + float(pct) * 0.55, f"{key_up}: {msg}")
+            except Exception:
+                pass
+
+        try:
+            if info is not None:
+                res = downloader.run_with_info(info, max_gse=max_gse, callback=cb)
+            else:
+                res = downloader.run(key_up, max_gse=max_gse, callback=cb)
+        except Exception as exc:
+            return ToolResult(
+                f"Auto-download of {key_up} failed: {exc}", ok=False)
+
+        fpath = res.get("filepath") if isinstance(res, dict) else None
+        if not fpath or not os.path.exists(fpath):
+            return ToolResult(
+                f"Auto-download of {key_up} produced no usable file.", ok=False)
+        return fpath
 
     def _load_exec(app, resolved, progress_cb):
         name = str(resolved.get("platform") or "").strip()
@@ -918,17 +1001,26 @@ def build_registry(app) -> Dict[str, Tool]:
             df = _platforms(app)[key_up]
             return ToolResult(f"{key_up} already loaded ({df.shape[0]} samples).",
                               payload={"platform": key_up})
-        progress_cb(20.0, f"Locating {key_up}…")
+        progress_cb(15.0, f"Locating {key_up}…")
         try:
             available = app._discover_available_platforms()
         except Exception:
             available = {}
         path = available.get(key_up) or available.get(name)
+
+        # Not on disk → download it straight from GEO (full automation).
+        if not path and bool(resolved.get("download", True)):
+            dl = _download_platform(app, key_up, resolved, progress_cb)
+            if isinstance(dl, ToolResult):
+                return dl  # surface the download failure
+            path = dl
+
         if not path:
             return ToolResult(
-                f"No local file found for {key_up}. Download it via the GPL "
-                "downloader, or place its CSV in the data directory.", ok=False)
-        progress_cb(50.0, f"Reading {key_up}…")
+                f"No local file found for {key_up} and auto-download is off. "
+                "Enable download, or place its CSV in the data directory.",
+                ok=False)
+        progress_cb(80.0, f"Reading {key_up}…")
         comp = "gzip" if str(path).endswith(".gz") else "infer"
         df = pd.read_csv(path, compression=comp, low_memory=False)
         # canonicalise: ensure a GSM column
@@ -951,9 +1043,16 @@ def build_registry(app) -> Dict[str, Tool]:
 
     tools["load_geo_platform"] = Tool(
         name="load_geo_platform",
-        description="Load a locally-available GEO/GPL microarray platform "
-                    "into memory so it can be analysed.",
-        params=[ToolParam("platform", "str", help="Platform id, e.g. GPL570.")],
+        description="Load a GEO/GPL microarray platform into memory so it can be "
+                    "analysed. If the platform isn't already on disk it is "
+                    "downloaded automatically from GEO (bounded by max_gse).",
+        params=[
+            ToolParam("platform", "str", help="Platform id, e.g. GPL570."),
+            ToolParam("download", "bool", required=False, default=True,
+                      help="Auto-download from GEO when not found locally."),
+            ToolParam("max_gse", "int", required=False, default=8,
+                      help="Max number of GEO series to fetch when downloading."),
+        ],
         resolver=_load_resolver, executor=_load_exec,
         examples=("load GPL570", "load the GEO platform GPL96",
                   "bring in microarray platform GPL10558"))
