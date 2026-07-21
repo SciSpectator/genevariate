@@ -16,9 +16,9 @@ Both drive the app's shared progress bar
 (``_acquire_progress``/``update_progress``/``_release_progress``); all analysis
 runs on worker threads and is marshalled back with ``self.after(0, ...)``.
 
-The chrome is a self-contained **dark dashboard UI** (CopilotKit-docs styled:
-near-black surface, indigo accent, rounded cards + pill buttons) built from
-plain ``tk`` widgets so its palette is independent of the light main window.
+The chrome is a self-contained **light dashboard UI** (Frutiger-Aero styled:
+sky-blue surface, blue accent, rounded cards + pill buttons) built from plain
+``tk`` widgets so its palette matches the light main window.
 
 Tk-only here; all analysis lives in ``genevariate.core.chatbot`` (Tk-free).
 """
@@ -41,26 +41,28 @@ except Exception:  # pragma: no cover
     }
 
 
-# ── Dark "dashboard" palette (CopilotKit docs) ─────────────────────────────
+# ── Light Frutiger-Aero "dashboard" palette ────────────────────────────────
+# Same keys as before (widgets read them by name) but light values so the
+# sidebar matches the main window's sky-blue chrome instead of a dark surface.
 DASH = {
-    "bg":        "#0B0B10",   # near-black page surface
-    "panel":     "#15151B",   # card surface
-    "panel2":    "#1D1D26",   # elevated control surface
-    "border":    "#2C2C38",   # hairline dividers
-    "text":      "#F3F3F6",   # primary text
-    "muted":     "#9A9AAC",   # secondary text
-    "accent":    "#6D5EF6",   # indigo / violet primary
-    "accent_hi": "#8577FF",   # accent hover
-    "accent_dim": "#2A2650",  # accent @ low opacity (selection / subtle bg)
-    "user":      "#9A8CFF",   # user message
-    "tool":      "#4FD1C5",   # tool / step accent (teal)
-    "ok":        "#5BD98A",   # success
-    "danger":    "#C05050",   # stop / error
+    "bg":        "#EFF7FD",   # light sky page surface
+    "panel":     "#FFFFFF",   # card surface (white)
+    "panel2":    "#E6F1FB",   # elevated control surface (soft blue)
+    "border":    "#C5DAEA",   # hairline dividers
+    "text":      "#0E2A45",   # primary text (deep navy)
+    "muted":     "#5F7D95",   # secondary text
+    "accent":    "#1E90E0",   # sky-blue primary
+    "accent_hi": "#3AA5EF",   # accent hover (lighter)
+    "accent_dim": "#D6EAF8",  # accent @ low opacity (selection / subtle bg)
+    "user":      "#0A5B9A",   # user message (accent dark)
+    "tool":      "#0E8F82",   # tool / step accent (teal, readable on light)
+    "ok":        "#2E9E5B",   # success (green)
+    "danger":    "#C0392B",   # stop / error (red)
 }
 
 
 class _PillButton(tk.Canvas):
-    """A rounded (capsule) button drawn on a Canvas, for the dark sidebar.
+    """A rounded (capsule) button drawn on a Canvas, for the sidebar.
 
     Uses PIL to render an anti-aliased rounded-rectangle background so it gets
     truly rounded corners (tk buttons cannot). Degrades to a flat rectangle if
@@ -156,8 +158,6 @@ class ChatSidebar(ttk.Frame):
         self._param_vars: Dict[str, tk.Variable] = {}
         self._busy = False
         self._stop_flag = False            # cooperative agent-run cancel
-        self._mode_var: Optional[tk.StringVar] = None
-        self._seg_btns: Dict[str, tk.Label] = {}
         self._build()
         self._greet()
 
@@ -180,21 +180,7 @@ class ChatSidebar(ttk.Frame):
         self._mode_lbl = tk.Label(header, text="", bg=D["bg"], fg=D["muted"],
                                   font=("Segoe UI", 8))
         self._mode_lbl.pack(side=tk.RIGHT, anchor="e")
-
-        # ── segmented mode toggle: Agent | Confirm ──────────────
-        seg = tk.Frame(root, bg=D["panel2"], highlightthickness=1,
-                       highlightbackground=D["border"])
-        seg.pack(side=tk.TOP, fill=tk.X, padx=14, pady=(2, 8))
-        default_mode = "Agent" if self._agent_ready() else "Confirm"
-        self._mode_var = tk.StringVar(value=default_mode)
-        for m in ("Agent", "Confirm"):
-            b = tk.Label(seg, text=m, bg=D["panel2"], fg=D["muted"],
-                         font=("Segoe UI", 10, "bold"), padx=14, pady=7,
-                         cursor="hand2")
-            b.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2, pady=2)
-            b.bind("<Button-1>", lambda _e, mm=m: self._set_mode(mm))
-            self._seg_btns[m] = b
-        self._set_mode(default_mode)
+        self._refresh_mode_chip()
 
         # ── transcript card ─────────────────────────────────────
         card = tk.Frame(root, bg=D["panel"], highlightthickness=1,
@@ -275,18 +261,6 @@ class ChatSidebar(ttk.Frame):
                                        bg=D["panel2"], fg=D["text"],
                                        hover=D["border"])
 
-    def _set_mode(self, mode: str) -> None:
-        """Select Agent/Confirm and repaint the segmented toggle."""
-        if self._mode_var is not None:
-            self._mode_var.set(mode)
-        D = DASH
-        for m, b in self._seg_btns.items():
-            if m == mode:
-                b.configure(bg=D["accent"], fg="#FFFFFF")
-            else:
-                b.configure(bg=D["panel2"], fg=D["muted"])
-        self._refresh_mode_chip()
-
     # -------------------------------------------------- transcript
     def _append(self, who: str, text: str, tag: str) -> None:
         self._transcript.configure(state=tk.NORMAL)
@@ -300,9 +274,8 @@ class ChatSidebar(ttk.Frame):
         self._append("bot",
                      "Tell me a goal and I'll carry out the analysis — e.g. "
                      "“analyse the distribution of TP53 in single-cell and GEO "
-                     "data and compare them”. In Agent mode I reason, pull the "
-                     "data and run the tools for you; in Confirm mode I propose "
-                     "one tool and wait for your OK.", "bot")
+                     "data and compare them”. I reason, pull the data and run "
+                     "the tools for you.", "bot")
 
     def _agent_ready(self) -> bool:
         try:
@@ -343,7 +316,9 @@ class ChatSidebar(ttk.Frame):
         self._entry.delete(0, tk.END)
         self._append("user", prompt, "user")
         self._hide_card()
-        if self._mode_var is not None and self._mode_var.get() == "Agent":
+        # One unified assistant: reason + run the tools when the agent backend
+        # is available, otherwise fall back to single-tool keyword routing.
+        if self._agent_ready():
             self._run_agent_goal(prompt)
         else:
             self._route_single_tool(prompt)

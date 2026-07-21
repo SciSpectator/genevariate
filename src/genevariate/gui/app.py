@@ -11369,7 +11369,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         tools_btn_frame = ttk.Frame(tools_frame)
         tools_btn_frame.pack(fill=tk.X, pady=4)
-        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="toolbtn")
+        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="toolbtn")
 
         self.gene_explorer_btn = ttk.Button(
             tools_btn_frame, text="Gene Distribution Explorer",
@@ -11379,27 +11379,20 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._set_tooltip(self.gene_explorer_btn,
                           "Interactive histograms & KDEs of gene expression across loaded platforms.")
 
-        self.compare_btn = ttk.Button(
-            tools_btn_frame, text="Compare Distributions",
-            command=self.open_compare_window,
-            style="ToolWarn.TButton")
-        self.compare_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.compare_btn,
-                          "Compare two or more gene / sample distributions with KDE, PCA/UMAP and clustering.")
-
-        self.dist_class_btn = ttk.Button(
-            tools_btn_frame, text="Distribution Classification",
-            command=self._open_dist_classification,
+        self.dist_analysis_btn = ttk.Button(
+            tools_btn_frame, text="Distribution Analysis",
+            command=self._open_distribution_analysis,
             style="ToolGreen.TButton")
-        self.dist_class_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.dist_class_btn,
-                          "Classify distributions (unimodal / bimodal / skew) and compute variability metrics.")
+        self.dist_analysis_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.dist_analysis_btn,
+                          "Compare distributions (KDE, PCA/UMAP, clustering) or classify them "
+                          "(unimodal / bimodal / skew + variability metrics).")
 
         self.label_enrich_btn = ttk.Button(
             tools_btn_frame, text="Label Enrichment",
             command=self._open_label_enrichment,
             style="Tool.TButton")
-        self.label_enrich_btn.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
+        self.label_enrich_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
         self._set_tooltip(self.label_enrich_btn,
                           "Fisher / hypergeometric enrichment of LLM-extracted labels across genes / distributions / platforms.")
 
@@ -11407,7 +11400,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             tools_btn_frame, text="Single-cell (CELLxGENE)",
             command=self._open_cellxgene_browser,
             style="Tool.TButton")
-        self.cellxgene_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
+        self.cellxgene_btn.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
         self._set_tooltip(self.cellxgene_btn,
                           "Browse and fetch single-cell RNA-seq data from the CELLxGENE Discover Census "
                           "(real public scRNA-seq submissions). Pseudo-bulk the result to use it in every other window, "
@@ -11417,7 +11410,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             tools_btn_frame, text="RNA-seq DE (raw counts)",
             command=self._open_rnaseq_de,
             style="ToolGreen.TButton")
-        self.rnaseq_de_btn.grid(row=0, column=5, padx=8, pady=6, sticky="ew")
+        self.rnaseq_de_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
         self._set_tooltip(self.rnaseq_de_btn,
                           "Load a raw count matrix (CSV / 10x MTX / h5ad), run QC + DESeq2 "
                           "differential expression, then GSEA. Register the normalised matrix "
@@ -12388,8 +12381,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                            foreground=AERO["warn"])
             # Tools stay enabled — each one can quick-load on demand.
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
         elif not has_loaded and has_available:
@@ -12401,8 +12393,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                      f"Use Gene Distribution Explorer for quick gene-only loading",
                 foreground=AERO["warn"])
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
         else:
@@ -12424,8 +12415,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                            foreground=AERO["green_dark"])
 
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
 
@@ -18620,6 +18610,29 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # Delegate to unified pipeline - it auto-detects compare mode when >1 region
         self._analyze_selected_range(popup)
     
+    def _open_distribution_analysis(self):
+        """Unified 'Distribution Analysis' entry point.
+
+        Presents the two distribution tools — Compare Distributions and
+        Distribution Classification — from a single button via a small popup
+        menu next to the button.
+        """
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Compare Distributions",
+                         command=self.open_compare_window)
+        menu.add_command(label="Distribution Classification",
+                         command=self._open_dist_classification)
+        btn = getattr(self, "dist_analysis_btn", None)
+        try:
+            if btn is not None:
+                x = btn.winfo_rootx()
+                y = btn.winfo_rooty() + btn.winfo_height()
+                menu.tk_popup(x, y)
+            else:
+                menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            menu.grab_release()
+
     def open_compare_window(self):
         """Opens Compare Distributions setup dialog — similar to Gene Explorer.
         User picks genes, platforms, batch correction, and label options.
