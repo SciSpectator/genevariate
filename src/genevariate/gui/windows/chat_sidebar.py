@@ -253,11 +253,13 @@ class ChatSidebar(ttk.Frame):
                                      hover="#D46464")
         # packed only while an agent run is in flight
 
-        # "View report" opens the latest tool's full markdown analysis.
-        self._last_report = ""
-        self._last_report_title = "Analysis report"
-        self._report_btn = _PillButton(root, "📄  View report",
-                                       self._open_report_window,
+        # Full analysis output opens in its OWN window (see _open_results_window);
+        # this button re-opens the latest result window on demand.
+        self._last_result = None
+        self._last_result_title = "Analysis result"
+        self._results_win = None
+        self._report_btn = _PillButton(root, "📄  Open results window",
+                                       self._reopen_results,
                                        bg=D["panel2"], fg=D["text"],
                                        hover=D["border"])
 
@@ -482,50 +484,67 @@ class ChatSidebar(ttk.Frame):
         if result is None:
             self._append("bot", "Done (no result).", "bot")
             return
+        # Keep the chatbox to a short line; the full output opens in its own window.
         self._append("bot", result.summary, "bot")
-        self._append_table(result)
-        self._offer_report(result)
+        self._present_result(result)
 
-    def _append_table(self, result) -> None:
+    def _present_result(self, result) -> None:
+        """Open the full analysis output (summary + table + report) in a
+        separate results window instead of crowding the small chatbox."""
         table = getattr(result, "table", None)
-        if table is not None:
-            try:
-                preview = table.head(8).to_string(max_cols=6)
-                self._append("sys", preview, "sys")
-            except Exception:
-                pass
-
-    def _offer_report(self, result) -> None:
-        """Surface a tool's markdown analysis: preview inline + open-in-window."""
-        report = getattr(result, "report", "") or ""
-        if not report.strip():
-            return
-        self._last_report = report
-        title = str(getattr(result, "summary", "") or "Analysis report")
-        self._last_report_title = title[:60]
-        preview = report.strip().splitlines()
-        head = "\n".join(preview[:8])
-        if len(preview) > 8:
-            head += "\n…"
-        self._append("report", head, "report")
+        report = (getattr(result, "report", "") or "").strip()
+        has_table = (table is not None and hasattr(table, "empty")
+                     and not table.empty)
+        if not has_table and not report:
+            return  # only a summary line — the chatbox message is enough
+        self._last_result = result
+        self._last_result_title = str(
+            getattr(result, "summary", "") or "Analysis result")[:70]
+        self._open_results_window(result)
+        self._append("sys", "↑ full results opened in a separate window.", "sys")
         try:
             self._report_btn.pack(side=tk.BOTTOM, fill=tk.X, padx=14,
                                   pady=(0, 4), before=self._entry_row)
         except Exception:
             pass
 
-    def _open_report_window(self) -> None:
-        if not self._last_report.strip():
-            return
+    def _reopen_results(self) -> None:
+        if self._last_result is not None:
+            self._open_results_window(self._last_result)
+
+    def _open_results_window(self, result) -> None:
+        """Build (or refocus) a Toplevel showing the summary, the full result
+        table and the markdown report for one analysis."""
         D = DASH
-        win = tk.Toplevel(self)
-        win.title(self._last_report_title)
-        win.geometry("640x560")
+        # Refocus an existing window rather than stacking duplicates.
+        win = self._results_win
+        try:
+            if win is not None and win.winfo_exists():
+                win.lift()
+                win.focus_force()
+            else:
+                win = None
+        except Exception:
+            win = None
+        if win is None:
+            win = tk.Toplevel(self)
+            self._results_win = win
+        else:
+            for c in win.winfo_children():
+                c.destroy()
+        win.title(self._last_result_title or "Analysis result")
+        win.geometry("760x640")
         win.configure(bg=D["bg"])
+
+        header = tk.Label(win, text=str(getattr(result, "summary", "") or ""),
+                          bg=D["bg"], fg=D["text"], wraplength=720,
+                          justify="left", font=("Segoe UI", 12, "bold"))
+        header.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(12, 6))
+
         frame = tk.Frame(win, bg=D["panel"], highlightthickness=1,
                          highlightbackground=D["border"])
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        txt = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10),
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        txt = tk.Text(frame, wrap=tk.NONE, font=("Consolas", 10),
                       bg=D["panel"], fg=D["text"], relief=tk.FLAT,
                       padx=10, pady=10, insertbackground=D["accent"],
                       selectbackground=D["accent_dim"], highlightthickness=0,
@@ -534,10 +553,30 @@ class ChatSidebar(ttk.Frame):
                            bg=D["panel2"], troughcolor=D["panel"],
                            activebackground=D["accent"], highlightthickness=0,
                            width=10)
-        txt.configure(yscrollcommand=vsb.set)
-        txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        txt.insert(tk.END, self._last_report)
+        hsb = tk.Scrollbar(frame, orient=tk.HORIZONTAL, command=txt.xview, bd=0,
+                           bg=D["panel2"], troughcolor=D["panel"],
+                           activebackground=D["accent"], highlightthickness=0,
+                           width=10)
+        txt.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        txt.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        txt.tag_configure("h", foreground=D["accent"],
+                          font=("Segoe UI", 11, "bold"), spacing1=8, spacing3=4)
+
+        table = getattr(result, "table", None)
+        if table is not None and hasattr(table, "empty") and not table.empty:
+            txt.insert(tk.END, "RESULT TABLE\n", "h")
+            try:
+                txt.insert(tk.END, table.to_string() + "\n\n")
+            except Exception:
+                txt.insert(tk.END, repr(table) + "\n\n")
+        report = (getattr(result, "report", "") or "").strip()
+        if report:
+            txt.insert(tk.END, "REPORT\n", "h")
+            txt.insert(tk.END, report + "\n")
         txt.configure(state=tk.DISABLED)
 
     # -------------------------------------------------- agent mode
@@ -667,8 +706,7 @@ class ChatSidebar(ttk.Frame):
         elif kind in ("tool_result", "step_result"):
             self._append("bot", text, "bot")
             if result is not None:
-                self._append_table(result)
-                self._offer_report(result)
+                self._present_result(result)
         elif kind in ("tool_error", "step_error"):
             self._append("bot", f"⚠ {text}", "bot")
         elif kind == "final":
