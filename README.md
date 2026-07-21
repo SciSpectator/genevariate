@@ -113,7 +113,7 @@ See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail
 
 ### NGS raw-count differential expression
 
-- **RNA-seq DE window** (Analysis Tools → *RNA-seq DE (raw counts)*) — load a raw count
+- **RNA-seq DE window** (Analysis Tools → *RNA-seq DE (NGS counts)*) — load a raw count
   matrix (CSV/TSV, 10x MTX directory, or `.h5ad`), run QC (library size, genes detected,
   %mito), DESeq2 median-of-ratios normalisation, negative-binomial DE via
   [`pydeseq2`](https://github.com/owkin/PyDESeq2), then GSEA on the Wald statistic

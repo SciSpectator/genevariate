@@ -10611,7 +10611,7 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                               command=self._open_enrichment_window)
         tools_menu.add_command(label="Discover Pseudo-Cohorts (embeddings)...",
                               command=self._open_pseudo_cohorts_window)
-        tools_menu.add_command(label="RNA-seq DE (raw counts)...",
+        tools_menu.add_command(label="RNA-seq DE (NGS counts)...",
                               command=self._open_rnaseq_de)
         tools_menu.add_separator()
         tools_menu.add_command(label="Assistant (chat)...",
@@ -11407,7 +11407,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                           "or open cell-level plots (composition / UMAP / dot plot / QC).")
 
         self.rnaseq_de_btn = ttk.Button(
-            tools_btn_frame, text="RNA-seq DE (raw counts)",
+            tools_btn_frame, text="RNA-seq DE (NGS counts)",
             command=self._open_rnaseq_de,
             style="ToolGreen.TButton")
         self.rnaseq_de_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
@@ -19405,7 +19405,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             import traceback
             traceback.print_exc()
             messagebox.showerror(
-                "RNA-seq DE (raw counts)",
+                "RNA-seq DE (NGS counts)",
                 f"Could not open the RNA-seq DE window:\n{exc}",
                 parent=self,
             )
