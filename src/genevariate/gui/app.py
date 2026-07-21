@@ -10218,6 +10218,16 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
             except Exception:
                 pass
 
+        # Round the *containers* too (cards / fields / tabs) so the whole GUI
+        # reads soft instead of angular — same PIL 9-slice trick as the pills.
+        try:
+            self._install_rounded_container_styles(style)
+        except Exception as _round_err:  # pragma: no cover - visual nicety only
+            try:
+                print(f"[UI] rounded-container restyle skipped: {_round_err}")
+            except Exception:
+                pass
+
         # ── Entries / comboboxes ─────────────────────────────────
         style.configure("TEntry",
                         fieldbackground="#FFFFFF",
@@ -10429,6 +10439,111 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         ]
         for spec in specs:
             _skin(*spec)
+
+    def _install_rounded_container_styles(self, style):
+        """Round the *container* chrome — LabelFrame cards, Entry/Combobox
+        fields and Notebook tabs — with the same anti-aliased PIL 9-slice
+        images used for the pill buttons, so the whole GUI reads soft instead
+        of angular. Each family is wrapped in its own try/except: any failure
+        keeps that widget's original square style, and generated PhotoImages
+        are retained on ``self`` so Tk cannot garbage-collect them.
+        """
+        from PIL import Image, ImageDraw, ImageTk
+
+        self._round_imgs = getattr(self, "_round_imgs", [])
+        A = AERO
+
+        def _rgba(hex_color, a=255):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), a)
+
+        def _card_image(fill_hex, radius, border_hex=None, border_px=1,
+                        round_bottom=True):
+            """Four-corner (or top-only) rounded-rect 9-slice. Returns (photo, r)."""
+            ss = 4
+            r = max(3, int(radius))
+            pad = border_px + 1
+            w = h = 2 * r + 8                       # fixed corners + small centre
+            W, H = w * ss, h * ss
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            outline = _rgba(border_hex) if border_hex else None
+            box = [pad * ss, pad * ss, W - 1 - pad * ss, H - 1 - pad * ss]
+            d.rounded_rectangle(box, radius=r * ss, fill=_rgba(fill_hex),
+                                outline=outline,
+                                width=(border_px * ss if outline else 0))
+            if not round_bottom:
+                # square off the lower half (tabs sit flush on the notebook body)
+                d.rectangle([box[0], (H // 2), box[2], box[3]],
+                            fill=_rgba(fill_hex),
+                            outline=outline,
+                            width=(border_px * ss if outline else 0))
+            img = img.resize((w, h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._round_imgs.append(photo)
+            return photo, r
+
+        # ── LabelFrame → rounded card (border blends with the page fill) ──────
+        try:
+            card_img, r = _card_image(A["bg_top"], 14, A["border"], 1)
+            style.element_create("Rounded.Labelframe.border", "image", card_img,
+                                 border=(r, r, r, r), sticky="nsew")
+            style.layout("TLabelframe",
+                         [("Rounded.Labelframe.border", {"sticky": "nsew"})])
+            style.configure("TLabelframe", background=A["bg_top"])
+        except Exception:
+            pass
+
+        # ── Entry → rounded white field ──────────────────────────────────────
+        try:
+            e_norm, er = _card_image("#FFFFFF", 10, A["border"], 1)
+            e_foc, _ = _card_image("#FFFFFF", 10, A["accent"], 1)
+            style.element_create("Rounded.Entry.field", "image", e_norm,
+                                 ("focus", e_foc),
+                                 border=(er, er, er, er), sticky="nsew")
+            style.layout("TEntry", [
+                ("Rounded.Entry.field", {"sticky": "nsew", "children": [
+                    ("Entry.padding", {"sticky": "nsew", "children": [
+                        ("Entry.textarea", {"sticky": "nsew"})]})]})])
+            style.configure("TEntry", padding=(8, 5))
+        except Exception:
+            pass
+
+        # ── Combobox → rounded white field (keep the dropdown arrow) ─────────
+        try:
+            c_norm, cr = _card_image("#FFFFFF", 10, A["border"], 1)
+            c_foc, _ = _card_image("#FFFFFF", 10, A["accent"], 1)
+            style.element_create("Rounded.Combobox.field", "image", c_norm,
+                                 ("focus", c_foc),
+                                 border=(cr, cr, cr, cr), sticky="nsew")
+            style.layout("TCombobox", [
+                ("Rounded.Combobox.field", {"sticky": "nsew", "children": [
+                    ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                    ("Combobox.padding", {"sticky": "nsew", "children": [
+                        ("Combobox.textarea", {"sticky": "nsew"})]})]})])
+            style.configure("TCombobox", padding=(8, 5))
+        except Exception:
+            pass
+
+        # ── Notebook tabs → rounded tops ─────────────────────────────────────
+        try:
+            t_norm, tr = _card_image(A["panel_bot"], 10, A["border"], 1,
+                                     round_bottom=False)
+            t_sel, _ = _card_image("#FFFFFF", 10, A["border"], 1,
+                                   round_bottom=False)
+            t_act, _ = _card_image(A["hover_sky"], 10, A["border"], 1,
+                                   round_bottom=False)
+            style.element_create("Rounded.Notebook.tab", "image", t_norm,
+                                 ("selected", t_sel), ("active", t_act),
+                                 border=(tr, tr, tr, 2), sticky="nsew")
+            style.layout("TNotebook.Tab", [
+                ("Rounded.Notebook.tab", {"sticky": "nsew", "children": [
+                    ("Notebook.padding", {"side": "top", "sticky": "nsew",
+                                          "children": [
+                        ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+            style.configure("TNotebook.Tab", padding=(16, 6))
+        except Exception:
+            pass
 
     def _load_persistent_cache(self):
         """Load GSE context cache from disk (survives restarts).

@@ -269,6 +269,11 @@ Full file tree is in [INSTALL.md](INSTALL.md#project-layout).
 2. **Extract** — watch the multi-phase LLM pipeline label every sample in real time
 3. **Analyse** — histograms, PCA, region selection, group comparison, enrichment
 
+The interface is a soft Frutiger-Aero theme: buttons, LabelFrame cards,
+entry/combobox fields and notebook tabs are all rendered as anti-aliased
+rounded capsules (PIL 9-slice ttk image elements), degrading to the plain
+square styles if imaging is unavailable.
+
 ### Headless / CLI
 
 ```bash
