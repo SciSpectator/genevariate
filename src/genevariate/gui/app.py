@@ -10613,6 +10613,8 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                               command=self._open_pseudo_cohorts_window)
         tools_menu.add_command(label="RNA-seq DE (NGS counts)...",
                               command=self._open_rnaseq_de)
+        tools_menu.add_command(label="Activity Inference (TF / pathway)...",
+                              command=self._open_activity_inference)
         tools_menu.add_separator()
         tools_menu.add_command(label="Assistant (chat)...",
                               accelerator="Ctrl+/",
@@ -19407,6 +19409,26 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             messagebox.showerror(
                 "RNA-seq DE (NGS counts)",
                 f"Could not open the RNA-seq DE window:\n{exc}",
+                parent=self,
+            )
+
+    def _open_activity_inference(self):
+        """Open the TF / pathway activity-inference window (decoupleR).
+
+        Advanced/optional analysis surfaced under Tools rather than the main
+        toolbar. Import-guarded so the app still launches without decoupler.
+        """
+        try:
+            from genevariate.gui.windows.activity_inference import (
+                ActivityInferenceWindow,
+            )
+            ActivityInferenceWindow(self)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "Activity Inference",
+                f"Could not open the Activity Inference window:\n{exc}",
                 parent=self,
             )
 
