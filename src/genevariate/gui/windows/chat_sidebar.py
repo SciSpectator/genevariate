@@ -1,18 +1,17 @@
 """
 Conversational assistant sidebar for the GeneVariate main window.
 
-A collapsible ``ttk.Frame`` on the right of the main window with two modes:
+A collapsible ``ttk.Frame`` on the right of the main window: one unified
+assistant window (no mode toggle). The user states a goal ("compare TP53
+between single-cell and GEO data") and a full LangChain reasoning agent
+decomposes it, decides which datasets to acquire (auto-downloading GEO
+platforms / fetching single-cell / loading NGS counts as needed), calls the
+analysis tools itself, and narrates each reasoning step live via an animated
+"thinking" strip. When the LLM stack is unavailable it falls back to
+deterministic single-tool keyword routing. Full result tables/reports open in
+a separate results window; the chatbox keeps only a short summary line.
 
-* **Agent** (default when a LangChain + ollama reasoning model is available):
-  the user states a goal ("compare TP53 between single-cell and GEO data") and a
-  full reasoning agent decomposes it, calls the analysis tools itself, narrates
-  its reasoning and each tool result live, and writes a final answer. Falls back
-  to a deterministic heuristic planner when the LLM stack is unavailable.
-* **Confirm**: the classic single-tool safety path — one request routes to ONE
-  tool, a confirmation card shows the **editable** resolved params, and nothing
-  runs until the user clicks *Run*.
-
-Both drive the app's shared progress bar
+It drives the app's shared progress bar
 (``_acquire_progress``/``update_progress``/``_release_progress``); all analysis
 runs on worker threads and is marshalled back with ``self.after(0, ...)``.
 
@@ -59,6 +58,12 @@ DASH = {
     "ok":        "#2E9E5B",   # success (green)
     "danger":    "#C0392B",   # stop / error (red)
 }
+
+
+def _short(text: Any, n: int = 44) -> str:
+    """Collapse whitespace and truncate for the one-line reasoning strip."""
+    t = " ".join(str(text or "").split())
+    return t if len(t) <= n else t[: n - 1] + "…"
 
 
 class _PillButton(tk.Canvas):
@@ -252,6 +257,19 @@ class ChatSidebar(ttk.Frame):
                                      bg=D["danger"], fg="#FFFFFF",
                                      hover="#D46464")
         # packed only while an agent run is in flight
+
+        # ── animated "thinking" strip (live reasoning animation) ─
+        self._anim_on = False
+        self._anim_frame = 0
+        self._anim_text = ""
+        self._anim_bar = tk.Frame(root, bg=D["bg"])
+        self._anim_dot = tk.Label(self._anim_bar, text="", bg=D["bg"],
+                                  fg=D["accent"], font=("Segoe UI", 13, "bold"))
+        self._anim_dot.pack(side=tk.LEFT, padx=(16, 6))
+        self._anim_lbl = tk.Label(self._anim_bar, text="", bg=D["bg"],
+                                  fg=D["muted"], font=("Segoe UI", 9, "italic"),
+                                  anchor="w")
+        self._anim_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Full analysis output opens in its OWN window (see _open_results_window);
         # this button re-opens the latest result window on demand.
@@ -701,10 +719,13 @@ class ChatSidebar(ttk.Frame):
     def _agent_event(self, kind: str, text: str, result) -> None:
         if kind == "thought":
             self._append("thought", text, "thought")
+            self._set_anim("Reasoning: " + _short(text))
         elif kind in ("tool_start", "step_start"):
             self._append("tool", f"→ {text}", "tool")
+            self._set_anim("Running " + _short(text))
         elif kind in ("tool_result", "step_result"):
             self._append("bot", text, "bot")
+            self._set_anim("Reviewing result…")
             if result is not None:
                 self._present_result(result)
         elif kind in ("tool_error", "step_error"):
@@ -713,6 +734,49 @@ class ChatSidebar(ttk.Frame):
             self._append("final", text, "final")
         else:  # "start" / "sys" / anything else
             self._append("sys", text, "sys")
+            self._set_anim(_short(text))
+
+    # -------------------------------------------------- animation
+    _SPIN = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def _start_anim(self, text: str = "") -> None:
+        self._anim_text = text or "Thinking"
+        if not self._anim_on:
+            self._anim_on = True
+            try:
+                self._anim_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 2),
+                                    before=self._entry_row)
+            except Exception:
+                pass
+            self._tick_anim()
+
+    def _set_anim(self, text: str) -> None:
+        self._anim_text = text
+        if not self._anim_on:
+            self._start_anim(text)
+
+    def _stop_anim(self) -> None:
+        self._anim_on = False
+        try:
+            self._anim_bar.pack_forget()
+        except Exception:
+            pass
+
+    def _tick_anim(self) -> None:
+        if not self._anim_on:
+            return
+        self._anim_frame = (self._anim_frame + 1) % 100000
+        f = self._anim_frame
+        spin = self._SPIN[f % len(self._SPIN)]
+        # gentle accent pulse between accent and accent_hi
+        color = DASH["accent"] if (f // 3) % 2 else DASH["accent_hi"]
+        dots = "." * (1 + (f // 3) % 3)
+        try:
+            self._anim_dot.configure(text=spin, fg=color)
+            self._anim_lbl.configure(text=f"{self._anim_text}{dots}")
+        except Exception:
+            return
+        self.after(90, self._tick_anim)
 
     def _show_stop(self, show: bool) -> None:
         if show:
@@ -733,5 +797,9 @@ class ChatSidebar(ttk.Frame):
         self._entry.configure(state=state)
         self._send_btn.configure(state=state)
         self._run_btn.configure(state=state)
+        if busy:
+            self._start_anim(note or "Thinking")
+        else:
+            self._stop_anim()
         if busy and note:
             self._append("sys", note, "sys")
