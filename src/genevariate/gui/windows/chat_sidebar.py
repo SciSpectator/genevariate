@@ -509,6 +509,13 @@ class ChatSidebar(ttk.Frame):
     def _present_result(self, result) -> None:
         """Open the full analysis output (summary + table + report) in a
         separate results window instead of crowding the small chatbox."""
+        # A newly-learned tool means the registry gained a member — drop the
+        # cache so the next request (and agent run) picks it up.
+        try:
+            if getattr(result, "payload", {}).get("_registry_dirty"):
+                self._registry = None
+        except Exception:
+            pass
         table = getattr(result, "table", None)
         report = (getattr(result, "report", "") or "").strip()
         has_table = (table is not None and hasattr(table, "empty")

@@ -76,8 +76,13 @@ def _validate(code: str) -> None:
             raise CodeValidationError("global/nonlocal are not allowed")
 
 
-def _build_namespace(platforms: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
-    """The read-only environment a snippet runs against."""
+def _build_namespace(platforms: Dict[str, pd.DataFrame],
+                     params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The read-only environment a snippet runs against.
+
+    ``params`` (used by *learned tools*) is exposed as a plain ``params`` dict so
+    a saved snippet can read its typed inputs, e.g. ``params['gene']``.
+    """
     from genevariate.core import analysis as A
 
     exposed = {}
@@ -92,6 +97,7 @@ def _build_namespace(platforms: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "pd": pd,
         "np": np,
         "platforms": safe_platforms,
+        "params": dict(params or {}),
         "result": None,
     }
     ns.update(exposed)
@@ -99,13 +105,14 @@ def _build_namespace(platforms: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
 
 
 def run_user_code(code: str, platforms: Dict[str, pd.DataFrame],
-                  timeout: float = 20.0) -> Dict[str, Any]:
+                  timeout: float = 20.0,
+                  params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Execute ``code`` against ``platforms`` behind the guardrails above.
 
     Returns a dict with ``ok``, ``stdout``, ``result`` (the snippet's ``result``
     variable), ``error`` and ``result_table`` (set when ``result`` is a
     DataFrame/Series). Never raises — validation and runtime errors are reported
-    in the returned dict.
+    in the returned dict. ``params`` is exposed to the snippet as ``params``.
     """
     code = str(code or "").strip()
     if not code:
@@ -116,7 +123,7 @@ def run_user_code(code: str, platforms: Dict[str, pd.DataFrame],
         return {"ok": False, "error": f"blocked: {exc}", "stdout": "",
                 "result": None}
 
-    ns = _build_namespace(platforms)
+    ns = _build_namespace(platforms, params)
     buf = io.StringIO()
     box: Dict[str, Any] = {"error": None}
 

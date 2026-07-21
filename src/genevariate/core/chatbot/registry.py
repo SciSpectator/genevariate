@@ -1251,4 +1251,84 @@ def build_registry(app) -> Dict[str, Tool]:
                   "get scRNA-seq from cellxgene for brain",
                   "pull single-cell data for EGFR"))
 
+    # ---- save_learned_tool (promote a snippet into a persisted named tool) --
+    def _save_tool_resolver(app, raw):
+        out = dict(raw)
+        params = raw.get("params")
+        if isinstance(params, str):
+            try:
+                import json as _json
+                params = _json.loads(params) if params.strip() else []
+            except Exception:
+                params = []
+        out["params"] = params if isinstance(params, list) else []
+        ex = raw.get("examples")
+        if isinstance(ex, str):
+            ex = [e.strip() for e in ex.replace(";", ",").split(",") if e.strip()]
+        out["examples"] = ex if isinstance(ex, list) else []
+        return out
+
+    def _save_tool_exec(app, resolved, progress_cb):
+        from .learned import save_learned_tool_record
+        from .code_exec import CodeValidationError
+        name = str(resolved.get("name") or "").strip()
+        code = str(resolved.get("code") or "").strip()
+        if not name or not code:
+            return ToolResult("Provide both a `name` and a `code` snippet (which "
+                              "must assign its answer to `result`).", ok=False)
+        progress_cb(40.0, f"Validating and saving learned tool '{name}'…")
+        try:
+            path = save_learned_tool_record(
+                app, name=name,
+                description=str(resolved.get("description") or ""),
+                code=code, params=resolved.get("params"),
+                examples=resolved.get("examples"))
+        except CodeValidationError as exc:
+            return ToolResult(f"Refused to save unsafe/invalid tool: {exc}",
+                              ok=False)
+        except Exception as exc:
+            return ToolResult(f"Could not save learned tool: {exc}", ok=False)
+        return ToolResult(
+            f"Learned tool '{name}' saved — it is now available on the next "
+            "request (and future sessions).",
+            report=f"# Learned tool saved: `{name}`\n\n```python\n{code}\n```",
+            payload={"path": path, "_registry_dirty": True})
+
+    tools["save_learned_tool"] = Tool(
+        name="save_learned_tool",
+        description="Promote a working sandboxed snippet into a NEW, persisted "
+                    "named tool so it can be reused later without rewriting the "
+                    "code. Use this after `run_analysis_code` succeeds on a task "
+                    "the user is likely to repeat. The snippet reads its typed "
+                    "inputs from a `params` dict, uses `platforms`, and assigns "
+                    "its answer to `result`; it runs in the same blocked sandbox "
+                    "(no imports / files / network). Same-named tool overwrites.",
+        params=[
+            ToolParam("name", "str",
+                      help="Short snake_case name for the new tool."),
+            ToolParam("description", "str", required=False, default="",
+                      help="What the tool does (shown to the agent)."),
+            ToolParam("code", "str",
+                      help="Sandboxed snippet; read `params`/`platforms`, set "
+                           "`result`."),
+            ToolParam("params", "list", required=False, default=[],
+                      help="JSON list of param specs "
+                           "[{name,type,required,default,help}]."),
+            ToolParam("examples", "list", required=False, default=[],
+                      help="Example phrasings that should trigger this tool."),
+        ],
+        resolver=_save_tool_resolver, executor=_save_tool_exec,
+        examples=("save this as a reusable tool called gene_zscore",
+                  "remember this analysis as a new tool",
+                  "turn that snippet into a named tool"))
+
+    # ---- merge in any previously-learned (persisted) tools ------------------
+    try:
+        from .learned import build_learned_tools
+        for lname, ltool in build_learned_tools(app).items():
+            if lname not in tools:  # never shadow a built-in
+                tools[lname] = ltool
+    except Exception:
+        pass
+
     return tools

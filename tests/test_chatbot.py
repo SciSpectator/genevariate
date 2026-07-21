@@ -89,6 +89,50 @@ def test_run_analysis_code_reports_runtime_error():
     assert "ZeroDivisionError" in res.summary
 
 
+def test_save_learned_tool_roundtrip(tmp_path):
+    """Agent can promote a snippet into a persisted named tool that then
+    appears in a rebuilt registry and runs with typed params."""
+    app = FakeApp({"GPLX": _platform_df()})
+    app.data_dir = str(tmp_path)
+    reg = build_registry(app)
+    assert "save_learned_tool" in reg
+
+    save = reg["save_learned_tool"]
+    code = ("g = params.get('gene', 'G0')\n"
+            "df = list(platforms.values())[0]\n"
+            "result = float(df[g].mean())")
+    resolved = save.resolver(app, {
+        "name": "Gene Mean!", "description": "mean of a gene", "code": code,
+        "params": '[{"name":"gene","type":"str","required":false,"default":"G0"}]',
+        "examples": "mean of a gene, average gene value"})
+    res = save.executor(app, resolved, lambda v, t: None)
+    assert res.ok
+    assert res.payload.get("_registry_dirty") is True
+
+    # rebuilt registry now exposes the learned tool (sanitized name)
+    reg2 = build_registry(app)
+    assert "gene_mean" in reg2
+    lt = reg2["gene_mean"]
+    assert lt.description.startswith("[learned]")
+    out = lt.executor(app, lt.resolver(app, {"gene": "G1"}), lambda v, t: None)
+    assert out.ok
+    assert isinstance(out.payload.get("result"), float)
+
+
+def test_save_learned_tool_refuses_unsafe_code(tmp_path):
+    app = FakeApp({"GPLX": _platform_df()})
+    app.data_dir = str(tmp_path)
+    reg = build_registry(app)
+    save = reg["save_learned_tool"]
+    res = save.executor(app, save.resolver(
+        app, {"name": "evil", "code": "import os\nresult = 1"}),
+        lambda v, t: None)
+    assert res.ok is False
+    assert "unsafe" in res.summary.lower() or "import" in res.summary.lower()
+    # nothing persisted -> not present in a rebuilt registry
+    assert "evil" not in build_registry(app)
+
+
 def _coexpr_platform(seed, n=40, scale=1.0, offset=7.0):
     rng = np.random.default_rng(seed)
     tp53 = rng.normal(offset, scale, n)
