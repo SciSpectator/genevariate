@@ -146,10 +146,12 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 - **Pluggable LLM backend** (`GENEVARIATE_AGENT_BACKEND`): because the agent drives
   GeneVariate's *Python API* (not the screen), a reliable tool-caller matters more than size —
   no vision model needed.
-  - `groq` (**default**) — Groq's free hosted **Llama-3.3-70B**, the fastest/strongest
-    tool-caller. Paste a free key once in-app (console.groq.com/keys); it's saved thereafter.
-  - `ollama` — a fully **local** model (default `qwen2.5:7b`; `qwen2.5:14b`+ for deeper
-    reasoning), private + offline, **auto-installed and auto-pulled** on first use.
+  - `ollama` (**default**) — a fully **local** model (default `gemma4:e2b`; `qwen2.5:14b`+
+    for deeper reasoning), private + offline, **no API key**, **auto-installed and
+    auto-pulled** on first use. gemma4 emits native Ollama tool-calls and drives the full
+    ReAct agent locally; a deterministic keyword-router fallback catches any flaky turn.
+  - `groq` — Groq's free hosted **Llama-3.3-70B**, the fastest/strongest tool-caller. Paste
+    a free key once in-app (console.groq.com/keys); it's saved thereafter.
   - anything else — an OpenAI-compatible endpoint (OpenRouter / Gemini / Cerebras / NVIDIA NIM)
     via `GENEVARIATE_AGENT_BASE_URL` + `GENEVARIATE_AGENT_API_KEY`.
 - **Zero manual setup:** the first time you use Agent mode the app auto-installs the LLM stack

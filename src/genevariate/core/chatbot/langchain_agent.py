@@ -55,10 +55,10 @@ except Exception as _exc:  # pragma: no cover - exercised only w/o extras
 
 
 # ---- backend + model configuration ----------------------------------
-DEFAULT_BACKEND = "groq"
+DEFAULT_BACKEND = "ollama"
 _BACKEND_MODELS = {
     "groq": "llama-3.3-70b-versatile",
-    "ollama": "qwen2.5:7b",
+    "ollama": "gemma4:e2b",
     "openai": "gpt-4o-mini",
 }
 DEFAULT_AGENT_MODEL = _BACKEND_MODELS[DEFAULT_BACKEND]
@@ -205,8 +205,32 @@ SYSTEM_PROMPT = (
     "Prefer real platform names returned by earlier tool calls. When you have "
     "enough information, STOP calling tools and write a short, concrete summary "
     "of the findings (distribution class, key statistics, whether sources differ "
-    "and how). Keep the final answer factual and grounded in tool outputs."
+    "and how). Keep the final answer factual and grounded in tool outputs. "
+    "Never end a turn without either calling a tool or writing a summary of a "
+    "tool result you already received. Do NOT ask the user to clarify a metadata "
+    "column, case/control labels, or gene-set libraries — every tool auto-selects "
+    "sensible defaults, so just call the tool. Never reload a platform that "
+    "`list_platforms` already shows as loaded."
 )
+
+
+def _unproductive(results: List["ToolResult"], final_text: str) -> bool:
+    """True when the reasoning loop produced no usable analysis answer.
+
+    Catches the failure modes a small local model falls into: a flaky empty
+    turn, a tool error surfaced as the final answer, or a clarifying question
+    that stalls instead of running with sensible defaults.
+    """
+    t = (final_text or "").strip().lower()
+    if not t:
+        return True
+    bad = ("i encountered an error", "error from ", "did not succeed",
+           "finished without", "please provide", "please specify",
+           "could not run", "no matching platform", "which gene",
+           "which platform")
+    if any(b in t for b in bad):
+        return True
+    return not any(getattr(r, "ok", False) for r in results)
 
 
 # ---- registry Tool -> LangChain StructuredTool ----------------------
@@ -668,6 +692,31 @@ def run_agent(
         except Exception as exc:
             on_event("tool_error", f"{name} failed: {exc}", None)
             final_text = f"ERROR from {name}: {exc}"
+
+    # Reliability net for weak local models: if the reasoning loop finished
+    # without a successful analysis — a flaky empty turn, a tool error, or a
+    # clarifying question — fall back to the deterministic keyword router and
+    # run the single tool it maps the goal to. Never raises.
+    if not reply.stopped and _unproductive(reply.results, final_text):
+        try:
+            from .router import _keyword_route
+            act = _keyword_route(goal, registry)
+            name = getattr(act, "tool", None)
+            if name in registry:
+                tool = registry[name]
+                raw = {k: v for k, v in (act.params or {}).items()
+                       if v not in (None, "")}
+                on_event("tool_start", f"{name}({raw})", None)
+                resolved = tool.coerce(tool.resolver(app, raw))
+                result = tool.executor(app, resolved,
+                                       progress_cb or (lambda v, t: None))
+                reply.results.append(result)
+                on_event("tool_result", result.summary, result)
+                if result.ok:
+                    final_text = _observation(result)
+                    reply.source = "router-fallback"
+        except Exception as exc:
+            on_event("tool_error", f"router fallback failed: {exc}", None)
 
     if not final_text:
         oks = [r for r in reply.results if r.ok]

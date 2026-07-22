@@ -699,10 +699,13 @@ def build_registry(app) -> Dict[str, Tool]:
 
     tools["compare_modalities"] = Tool(
         name="compare_modalities",
-        description="Compare the SAME gene across different data modalities "
-                    "(microarray / RNA-seq / single-cell) on a harmonised scale "
+        description="Compare the SAME gene across different data MODALITIES "
+                    "(microarray / RNA-seq / single-cell) on a HARMONISED scale "
                     "(z-score or rank), then test whether its distribution shape "
-                    "is consistent across modalities.",
+                    "is consistent across modalities. ALWAYS pick this tool when "
+                    "the request says 'modalities', 'harmonise/harmonize', "
+                    "'z-score', 'rank scale', or 'batch correction' — even if it "
+                    "also names specific platforms like GPL570/GPL96.",
         params=[
             ToolParam("gene", "str", help="Gene symbol to compare."),
             ToolParam("platforms", "list", required=False,
