@@ -7136,10 +7136,10 @@ class CompareDistributionsWindow(tk.Toplevel):
             highlight_x = X_2d[idx, 0]
             highlight_y = X_2d[idx, 1]
 
-            # Draw orange-ringed markers over selected points
+            # Draw purple-ringed markers over selected points
             sc = ax.scatter(
                 highlight_x, highlight_y,
-                s=120, facecolors='none', edgecolors='#FF6D00',
+                s=120, facecolors='none', edgecolors='#7B1FA2',
                 linewidths=2.5, zorder=10, label='_brushed')
             self._brush_highlights.setdefault(key, []).append(sc)
 
@@ -7170,7 +7170,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                         for v in brush_vals:
                             line = dist_ax.axvline(
                                 v, ymin=0, ymax=0.06,
-                                color='#FF6D00', linewidth=2,
+                                color='#7B1FA2', linewidth=2,
                                 alpha=0.8, zorder=10)
                             arts.append(line)
                         self._brush_highlights.setdefault(
@@ -7290,7 +7290,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                 for j, c in enumerate(all_c):
                     contingency[i, j] = ((L == label) & (cluster_ids == c)).sum()
 
-            im = ax2.imshow(contingency, aspect='auto', cmap='YlOrRd')
+            im = ax2.imshow(contingency, aspect='auto', cmap='Blues')
             c_labels = [f"C{c}" if c != -1 else "Noise" for c in all_c]
             ax2.set_xticks(range(len(all_c)))
             ax2.set_xticklabels(c_labels)
@@ -7403,7 +7403,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                 for ci in range(k_val):
                     contingency[i, ci] = ((L == label) & (cluster_ids == ci)).sum()
 
-            im = ax2.imshow(contingency, aspect='auto', cmap='YlOrRd')
+            im = ax2.imshow(contingency, aspect='auto', cmap='Blues')
             ax2.set_xticks(range(k_val))
             ax2.set_xticklabels([f"C{i}" for i in range(k_val)])
             ax2.set_yticks(range(len(uL)))
@@ -17367,7 +17367,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
     def _plot_histograms_overlay(self, popup, sel_plats):
         """Overlay all selected genes on one plot per platform."""
         genes = popup.current_genes
-        gene_colors = ['#1976D2', '#C62828', '#2E7D32', '#F57C00', '#7B1FA2',
+        gene_colors = ['#1976D2', '#C62828', '#2E7D32', '#17BECF', '#7B1FA2',
                         '#00838F', '#AD1457', '#4E342E', '#37474F', '#827717']
 
         if not hasattr(popup, '_overlay_genes'):
@@ -17510,7 +17510,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         if not overlay:
             return
 
-        chosen_color = '#FF6F00'
+        chosen_color = '#7B1FA2'
         count = 0
 
         for dfg, plat, col, gene, bins, patches in overlay:
@@ -17552,7 +17552,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         popup.compare_btn.config(state=tk.NORMAL if total > 1 else tk.DISABLED)
         popup.selection_label.config(
             text=f"[*] {count} gene(s) x {total} region(s) selected (overlay)",
-            foreground='#FF6F00'
+            foreground='#7B1FA2'
         )
 
     def _plot_single_histogram(self, ax, gene, plat, popup, batch_offset=0):
@@ -17609,7 +17609,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             expr = expr - batch_offset
         
         if expr.empty:
-            ax.set_title(f"{plat} - {col}\n[!] No data", color='orange', fontsize=10, weight='bold')
+            ax.set_title(f"{plat} - {col}\n[!] No data", color='#C0392B', fontsize=10, weight='bold')
             ax.axis("off")
             return None
         
@@ -18431,7 +18431,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     'label': f"{gene}_R{len(region_specs)+1}_{plat}",
                     'gene': gene, 'platform': plat, 'column': col,
                     'range': (low, high),
-                    'color': color if isinstance(color, str) else '#FF6F00',
+                    'color': color if isinstance(color, str) else '#7B1FA2',
                     'expression_values': expr_vals,
                     'gsm_list': gsms,
                     'platform_df': platform_slim,
@@ -19862,7 +19862,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 if len(example_genes) == 1:
                     axes = [axes]
 
-                colors = ['#1565C0', '#C62828', '#2E7D32', '#E65100', '#7B1FA2']
+                colors = ['#1565C0', '#C62828', '#2E7D32', '#00838F', '#7B1FA2']
                 for idx, (gene_row, ax_i) in enumerate(zip(example_genes, axes)):
                     gene_name = gene_row['Gene']
                     gene_col = gene_mapping.get(gene_name, gene_name)

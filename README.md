@@ -141,8 +141,15 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   When the reasoning stack isn't available it falls back to deterministic keyword routing, so
   the assistant works either way.
 - **Results open in their own window:** the chat transcript stays short (a one-line summary per
-  step); the full **result table + markdown report** pops up in a separate, scrollable results
-  window (re-openable with *Open results window*) so the small chatbox never gets crowded.
+  step); the full **result table + embedded chart + markdown report** pops up in a separate,
+  scrollable results window (re-openable with *Open results window*) so the small chatbox never
+  gets crowded.
+- **Charts + chart understanding:** every visual tool draws its plot (distribution histogram,
+  cross-source overlay, enrichment/ranking bar) into the results window, and — because the local
+  model is text-only — each chart ships with a **data-grounded descriptor** (shape, center,
+  spread, outliers, direction, top terms) that the assistant reads to *interpret* the graph in
+  words. It understands the chart from the numbers behind it, not from pixels, so it stays fully
+  local with no vision model.
 - **Pluggable LLM backend** (`GENEVARIATE_AGENT_BACKEND`): because the agent drives
   GeneVariate's *Python API* (not the screen), a reliable tool-caller matters more than size —
   no vision model needed.

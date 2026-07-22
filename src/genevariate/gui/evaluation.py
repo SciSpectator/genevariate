@@ -1386,7 +1386,7 @@ def _plots(hp1, hrc, jp1, jrc, out):
                 v  = df[df['field']==fld]['verdict'].value_counts()
                 cm = np.array([[v.get('TP',0), v.get('FP',0)],
                                [v.get('FN',0), v.get('TN',0)]])
-                ax.imshow(cm, cmap='Oranges', aspect='auto')
+                ax.imshow(cm, cmap='Blues', aspect='auto')
                 ax.set_xticks([0,1]); ax.set_yticks([0,1])
                 ax.set_xticklabels(['P','N'], fontsize=8)
                 ax.set_yticklabels(['P','N'], fontsize=8)

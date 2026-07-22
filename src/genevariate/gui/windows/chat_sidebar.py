@@ -551,6 +551,16 @@ class ChatSidebar(ttk.Frame):
                 win = None
         except Exception:
             win = None
+        # Release the previous embedded figure/canvas before we rebuild, so
+        # matplotlib Figures don't accumulate across successive analyses.
+        old_canvas = getattr(self, "_results_canvas", None)
+        if old_canvas is not None:
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(old_canvas.figure)
+            except Exception:
+                pass
+            self._results_canvas = None
         if win is None:
             win = tk.Toplevel(self)
             self._results_win = win
@@ -565,6 +575,21 @@ class ChatSidebar(ttk.Frame):
                           bg=D["bg"], fg=D["text"], wraplength=720,
                           justify="left", font=("Segoe UI", 12, "bold"))
         header.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(12, 6))
+
+        # Embed the analysis chart (histogram / overlay / enrichment bar) when
+        # the tool produced one — the assistant both shows and interprets it.
+        figure = getattr(result, "figure", None)
+        if figure is not None:
+            try:
+                from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                fig_frame = tk.Frame(win, bg=D["bg"])
+                fig_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 6))
+                canvas = FigureCanvasTkAgg(figure, master=fig_frame)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill=tk.X, expand=False)
+                self._results_canvas = canvas  # keep a ref so it isn't GC'd
+            except Exception:
+                pass
 
         frame = tk.Frame(win, bg=D["panel"], highlightthickness=1,
                          highlightbackground=D["border"])

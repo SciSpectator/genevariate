@@ -183,8 +183,10 @@ def palette_for(n: int, use_case: str = "discrete") -> List[str]:
         * logfc     — ignored for discrete (use cmap_for instead)
     """
     if use_case == "aero":
+        # Blue/green Frutiger-Aero series colors — never orange (warn is a
+        # UI-only warning hue, not a data-series color). Teal fills the slot.
         base = [AERO["accent"], AERO["green"], AERO["accent_dark"],
-                AERO["green_dark"], AERO["warn"], AERO["danger"],
+                AERO["green_dark"], "#00838F", AERO["danger"],
                 AERO["accent_light"], AERO["green_light"]]
         if n <= len(base):
             return base[:n]
@@ -209,7 +211,7 @@ def cmap_for(kind: str = "intensity"):
         * intensity  — sequential low→high (viridis)
         * logfc      — diverging around 0 (RdBu_r)
         * divergent  — alias for logfc
-        * pvalue / qvalue — sequential (YlOrRd, high = significant)
+        * pvalue / qvalue — sequential (YlGnBu, high = significant)
         * correlation    — diverging (coolwarm)
     """
     mapping = {
@@ -217,8 +219,8 @@ def cmap_for(kind: str = "intensity"):
         "expression":  "viridis",
         "logfc":       "RdBu_r",
         "divergent":   "RdBu_r",
-        "pvalue":      "YlOrRd",
-        "qvalue":      "YlOrRd",
+        "pvalue":      "YlGnBu",
+        "qvalue":      "YlGnBu",
         "correlation": "coolwarm",
         "heat":        "magma",
     }

@@ -1390,8 +1390,8 @@ class RegionAnalysisWindow(tk.Toplevel):
              '#B71C1C', '#D32F2F', '#F44336', '#E57373'],
             ['#2E7D32', '#388E3C', '#43A047', '#66BB6A', '#A5D6A7',
              '#1B5E20', '#4CAF50', '#81C784', '#C8E6C9'],
-            ['#F57F17', '#F9A825', '#FBC02D', '#FFD54F', '#FFE082',
-             '#E65100', '#FF8F00', '#FFA000', '#FFB300'],
+            ['#4E342E', '#6D4C41', '#8D6E63', '#A1887F', '#D7CCC8',
+             '#3E2723', '#5D4037', '#795548', '#BCAAA4'],
             ['#6A1B9A', '#7B1FA2', '#8E24AA', '#AB47BC', '#CE93D8',
              '#4A148C', '#9C27B0', '#BA68C8', '#E1BEE7'],
             ['#00838F', '#00ACC1', '#00BCD4', '#26C6DA', '#80DEEA',
@@ -1884,7 +1884,7 @@ class RegionAnalysisWindow(tk.Toplevel):
             fig_h = max(5, 0.4 * n_bars + 1.5)
             fig, ax = plt.subplots(figsize=(16, fig_h))
 
-            bc = ['#C62828' if r >= 3 else '#E53935' if r >= 2 else '#FB8C00' if r >= 1.5
+            bc = ['#C62828' if r >= 3 else '#E53935' if r >= 2 else '#EF9A9A' if r >= 1.5
                   else '#43A047' if r >= 1 else '#78909C' for r in rdf['Enrichment']]
             trunc_vals = [_tr(v, 35) for v in rdf['Value']]
             bars = ax.barh(trunc_vals, rdf['Enrichment'], color=bc, edgecolor='black', lw=0.4)
@@ -2170,8 +2170,8 @@ class RegionAnalysisWindow(tk.Toplevel):
             #  PLOT 2: Enrichment ratio bars (colored by significance)
             # ════════════════════════════════════════════════════════════
             enrich_vals = [min(r['Enrichment'], 30) for r in top_rows]  # cap at 30 for display
-            bar_colors = ['#C62828' if s == '***' else '#E65100' if s == '**'
-                          else '#F9A825' if s == '*' else '#BDBDBD' for s in sigs]
+            bar_colors = ['#C62828' if s == '***' else '#E53935' if s == '**'
+                          else '#EF9A9A' if s == '*' else '#BDBDBD' for s in sigs]
 
             ax2.barh(y_pos, enrich_vals, 0.55, color=bar_colors,
                      edgecolor='black', lw=0.4, alpha=0.85)
@@ -2197,8 +2197,8 @@ class RegionAnalysisWindow(tk.Toplevel):
             from matplotlib.patches import Patch as _Patch
             ax2.legend(handles=[
                 _Patch(facecolor='#C62828', label='p<0.001 ***'),
-                _Patch(facecolor='#E65100', label='p<0.01 **'),
-                _Patch(facecolor='#F9A825', label='p<0.05 *'),
+                _Patch(facecolor='#E53935', label='p<0.01 **'),
+                _Patch(facecolor='#EF9A9A', label='p<0.05 *'),
                 _Patch(facecolor='#BDBDBD', label='ns'),
             ], fontsize=6, loc='lower right', framealpha=0.9)
 
@@ -2228,8 +2228,8 @@ class RegionAnalysisWindow(tk.Toplevel):
             x_vals = [np.log2(max(r['Enrichment'], 0.01)) for r in volcano_rows]
             y_vals = [-np.log10(max(r['p-value'], 1e-50)) for r in volcano_rows]
             v_sigs = [r['Sig'] for r in volcano_rows]
-            v_colors = ['#C62828' if s == '***' else '#E65100' if s == '**'
-                        else '#F9A825' if s == '*' else '#BDBDBD' for s in v_sigs]
+            v_colors = ['#C62828' if s == '***' else '#E53935' if s == '**'
+                        else '#EF9A9A' if s == '*' else '#BDBDBD' for s in v_sigs]
 
             ax.scatter(x_vals, y_vals, c=v_colors, s=45, alpha=0.75,
                        edgecolor='black', lw=0.3, zorder=3,
@@ -2250,8 +2250,8 @@ class RegionAnalysisWindow(tk.Toplevel):
             from matplotlib.patches import Patch as _Patch2
             ax.legend(handles=[
                 _Patch2(facecolor='#C62828', label='p<0.001 ***'),
-                _Patch2(facecolor='#E65100', label='p<0.01 **'),
-                _Patch2(facecolor='#F9A825', label='p<0.05 *'),
+                _Patch2(facecolor='#E53935', label='p<0.01 **'),
+                _Patch2(facecolor='#EF9A9A', label='p<0.05 *'),
                 _Patch2(facecolor='#BDBDBD', label='ns'),
             ], fontsize=9, loc='upper left', framealpha=0.9)
             ax.grid(alpha=0.15)

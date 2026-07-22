@@ -243,11 +243,15 @@ def build_registry(app) -> Dict[str, Tool]:
         except Exception:
             report = ""
         report = _append_manifest(report, manifest)
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(ranked, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Condition enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, report=report, manifest=manifest,
-            payload={"ranked": ranked, "gsea": gsea, "report": report})
+            table=top, report=report, manifest=manifest, figure=fig,
+            payload={"ranked": ranked, "gsea": gsea, "chart": cdesc,
+                     "report": report})
 
     # ---- variability_enrichment ---------------------------------
     def _var_exec(app, resolved, progress_cb):
@@ -275,11 +279,15 @@ def build_registry(app) -> Dict[str, Tool]:
                 ranked, gsea, comparison, method or VARIABILITY_DEFAULT_METHOD)
         except Exception:
             report = ""
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(ranked, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Variability enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, report=report,
-            payload={"ranked": ranked, "gsea": gsea, "report": report})
+            table=top, report=report, figure=fig,
+            payload={"ranked": ranked, "gsea": gsea, "chart": cdesc,
+                     "report": report})
 
     # ---- rank_genes (no GSEA) -----------------------------------
     def _rank_exec(app, resolved, progress_cb):
@@ -289,9 +297,14 @@ def build_registry(app) -> Dict[str, Tool]:
         progress_cb(40.0, "Ranking genes…")
         ranked = rank_genes_by_condition(df, labels, case, control,
                                          moderated=bool(resolved.get("moderated", False)))
+        from . import charts
+        title = f"Top genes — {case} vs {control}"
+        fig, cdesc = charts.fig_from_enrichment(ranked, None, title)
+        report = charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Top-ranked genes ({case} vs {control}) on {resolved.get('platform')}.",
-            table=ranked.head(25), payload={"ranked": ranked})
+            table=ranked.head(25), report=report, figure=fig,
+            payload={"ranked": ranked, "chart": cdesc})
 
     # ---- classify_distributions (modality landscape) ------------
     def _modality_resolver(app, raw):
@@ -417,12 +430,15 @@ def build_registry(app) -> Dict[str, Tool]:
         report = _append_manifest(report, manifest)
         n = _gsea_term_count(gsea)
         top = gsea.head(15) if n else combined.head(15)
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(combined, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Cross-platform meta-enrichment ({method}) over {len(used)} "
             f"platform(s): {n} consensus term(s).",
-            table=top, report=report, manifest=manifest,
+            table=top, report=report, manifest=manifest, figure=fig,
             payload={"combined": combined, "gsea": gsea,
-                     "platforms": used, "report": report})
+                     "platforms": used, "chart": cdesc, "report": report})
 
     tools: Dict[str, Tool] = {}
 
@@ -551,10 +567,14 @@ def build_registry(app) -> Dict[str, Tool]:
                   f"({cv:.2f})\n"
                   f"- **Range**: {stats.get('min', float('nan')):.3g} – "
                   f"{stats.get('max', float('nan')):.3g}\n")
-        return ToolResult(summ, table=tbl, report=report,
+        from . import charts
+        fig, desc = charts.fig_histogram(vec, gene, label=key,
+                                         dist_class=stats.get("distribution", ""))
+        report += charts.describe_distribution_block(desc)
+        return ToolResult(summ, table=tbl, report=report, figure=fig,
                           payload={"gene": gene, "platform": key,
                                    "values": vec, "stats": stats,
-                                   "report": report})
+                                   "chart": desc, "report": report})
 
     tools["gene_distribution"] = Tool(
         name="gene_distribution",
@@ -643,9 +663,13 @@ def build_registry(app) -> Dict[str, Tool]:
         if ks_txt:
             rlines.append("\n**Two-sample test:**" + ks_txt)
         report = "\n".join(rlines)
-        return ToolResult(summ, table=table, report=report,
+        from . import charts
+        fig, desc = charts.fig_overlay(vecs, gene)
+        report += charts.describe_overlay_block(desc)
+        return ToolResult(summ, table=table, report=report, figure=fig,
                           payload={"gene": gene, "sources": usable,
-                                   "vectors": vecs, "report": report})
+                                   "vectors": vecs, "chart": desc,
+                                   "report": report})
 
     tools["compare_gene"] = Tool(
         name="compare_gene",
@@ -690,12 +714,17 @@ def build_registry(app) -> Dict[str, Tool]:
         n_found = int(tbl["n"].fillna(0).gt(0).sum()) if "n" in tbl.columns else 0
         if n_found == 0:
             return ToolResult(f"{gene!r} was not found in any source.", ok=False)
+        from . import charts
+        harm = {k: v for k, v in (res.get("harmonized") or {}).items()
+                if v is not None and getattr(v, "size", 0) > 1}
+        fig, desc = charts.fig_overlay(harm, gene)
+        report = res["report"] + charts.describe_overlay_block(desc)
         return ToolResult(res["summary"], table=res["table"],
-                          report=res["report"],
+                          report=report, figure=fig,
                           payload={"gene": gene, "pairwise": res["pairwise"],
                                    "harmonized": res["harmonized"],
                                    "concordant": res["concordant"],
-                                   "report": res["report"]})
+                                   "chart": desc, "report": report})
 
     tools["compare_modalities"] = Tool(
         name="compare_modalities",

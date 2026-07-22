@@ -209,6 +209,72 @@ def test_keyword_extracts_multiple_platforms_for_compare():
     assert a.params.get("platforms") == ["GPL570", "GPL96"]
 
 
+@pytest.mark.parametrize("prompt, expected", [
+    # list / status
+    ("what platforms are loaded", "list_platforms"),
+    ("list my datasets", "list_platforms"),
+    ("which datasets do I have", "list_platforms"),
+    # enrichment family
+    ("run condition enrichment on GPL570 tumor vs normal", "condition_enrichment"),
+    ("condition enrichment tumor versus normal", "condition_enrichment"),
+    ("run variability enrichment on GPL96", "variability_enrichment"),
+    ("which genes are most variable and enriched", "variability_enrichment"),
+    ("run meta enrichment across GPL570 and GPL96 tumor vs normal", "meta_enrichment"),
+    ("combine enrichment across platforms tumor vs normal", "meta_enrichment"),
+    # ranking
+    ("rank genes tumor vs normal", "rank_genes"),
+    ("top differential genes on GPL570", "rank_genes"),
+    ("show me the most differentially expressed genes", "rank_genes"),
+    # single-gene distribution vs whole-platform classification
+    ("analyze the distribution of TP53", "gene_distribution"),
+    ("show TP53 distribution on GPL570", "gene_distribution"),
+    ("plot histogram of EGFR", "gene_distribution"),
+    ("is BRCA1 bimodal", "gene_distribution"),
+    ("classify the gene distributions on GPL570", "classify_distributions"),
+    ("what distribution shapes are in GPL96", "classify_distributions"),
+    # compare (plain) vs modalities (harmonised)
+    ("compare TP53 across GPL570 and GPL96", "compare_gene"),
+    ("how does EGFR differ across platforms", "compare_gene"),
+    ("side by side MYC on GPL570 and GPL96", "compare_gene"),
+    ("compare TP53 across microarray and rna-seq modalities", "compare_modalities"),
+    ("harmonize TP53 across modalities with z-score", "compare_modalities"),
+    ("batch correct and compare MYC across platforms", "compare_modalities"),
+    # connections
+    ("what genes are connected to TP53 on GPL570", "gene_connections"),
+    ("co-expression network for EGFR", "gene_connections"),
+    ("which genes correlate with BRCA1", "gene_connections"),
+    # loading
+    ("load GPL570", "load_geo_platform"),
+    ("load the GEO platform GPL96", "load_geo_platform"),
+    ("download dataset GPL571", "load_geo_platform"),
+    # activity + single-cell
+    ("infer TF activity on GPL570", "activity_inference"),
+    ("transcription factor activity for GPL96", "activity_inference"),
+    ("fetch single cell data for TP53 in lung", "fetch_single_cell"),
+    ("get single-cell expression of EGFR in brain", "fetch_single_cell"),
+])
+def test_keyword_router_prompt_battery(prompt, expected):
+    """Broad natural-language battery on the deterministic (ollama-off) router."""
+    reg = build_registry(FakeApp({"GPL570": _platform_df(),
+                                  "GPL96": _platform_df()}))
+    assert route(prompt, reg).tool == expected
+
+
+def test_strong_intent_overrides_bag_of_words():
+    """The high-precision deterministic overrides fire on their target shapes."""
+    reg = build_registry(FakeApp({"GPL570": _platform_df(),
+                                  "GPL96": _platform_df()}))
+    # load verb + GPL id must never fall through to no-tool
+    assert route("download dataset GPL571", reg).tool == "load_geo_platform"
+    # a single gene + shape word is a profile, not a modality comparison
+    assert route("is BRCA1 bimodal", reg).tool == "gene_distribution"
+    # side-by-side of one gene across 2 GPLs is a plain compare, not modalities
+    assert route("side by side MYC on GPL570 and GPL96", reg).tool == "compare_gene"
+    # a fetch verb WITHOUT a GPL id (single-cell) is not a platform load
+    assert route("fetch single cell data for TP53 in lung", reg).tool \
+        == "fetch_single_cell"
+
+
 def test_llm_route_valid_json(monkeypatch):
     reg = build_registry(FakeApp())
     import genevariate.core.ollama_manager as om
@@ -344,3 +410,46 @@ def test_planner_routes_analytical_intent():
     assert ce.params.get("control_label") == "normal"
     # it should NOT degrade to profiling a bogus gene like 'CONDITION'
     assert "gene_distribution" not in tools
+
+
+def test_charts_descriptor_is_data_grounded():
+    """describe_values extracts the numbers a reader takes off a chart."""
+    import numpy as np
+    from genevariate.core.chatbot import charts
+    v = np.concatenate([np.full(50, 2.0), np.full(50, 8.0)])  # clear two modes
+    d = charts.describe_values(v, dist_class="Bimodal")
+    assert d["n"] == 100
+    assert d["n_modes"] == 2
+    assert abs(d["mean"] - 5.0) < 1e-6
+    block = charts.describe_distribution_block(d)
+    assert "What the chart shows" in block and "two peaks" in block
+
+
+def test_gene_distribution_emits_figure_and_chart_block():
+    import matplotlib
+    matplotlib.use("Agg")
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["gene_distribution"]
+    resolved = tool.coerce(tool.resolver(app, {"gene": "G0", "platform": "GPLX"}))
+    res = tool.executor(app, resolved, lambda v, t: None)
+    assert res.ok
+    assert res.figure is not None                       # embeddable plot
+    assert "What the chart shows" in res.report          # LLM-narratable descriptor
+    assert "chart" in res.payload and res.payload["chart"]["n"] == 6
+
+
+def test_enrichment_bar_reports_top_genes():
+    import matplotlib
+    matplotlib.use("Agg")
+    app = FakeApp({"GPLX": _platform_df()})
+    reg = build_registry(app)
+    tool = reg["rank_genes"]
+    resolved = tool.coerce(tool.resolver(
+        app, {"platform": "GPLX", "case_label": "tumor",
+              "control_label": "normal"}))
+    res = tool.executor(app, resolved, lambda v, t: None)
+    assert res.ok
+    assert res.figure is not None
+    assert "What the chart shows" in res.report
+    assert res.payload["chart"]["top"]
