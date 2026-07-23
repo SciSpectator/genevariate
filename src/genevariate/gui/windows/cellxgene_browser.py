@@ -184,9 +184,9 @@ class CellxGeneBrowserWindow(tk.Toplevel):
 
         r2 = ttk.Frame(left); r2.pack(fill=tk.X, pady=4)
         ttk.Label(r2, text="Max cells:", width=13).pack(side=tk.LEFT)
-        self.max_cells_var = tk.StringVar(value="50000")
+        self.max_cells_var = tk.StringVar(value="0")
         ttk.Entry(r2, textvariable=self.max_cells_var, width=12).pack(side=tk.LEFT, padx=4)
-        ttk.Label(r2, text="(hard cap — larger fetches are subsampled)",
+        ttk.Label(r2, text="(0 = all matching cells; set a number only to cap for memory)",
                   font=("Segoe UI", 8, "italic"), foreground="gray"
                   ).pack(side=tk.LEFT, padx=4)
 
@@ -418,7 +418,7 @@ class CellxGeneBrowserWindow(tk.Toplevel):
             if max_cells <= 0:
                 max_cells = None
         except Exception:
-            max_cells = 50_000
+            max_cells = None
 
         self._set_status("Fetching from CELLxGENE Census…")
         self.fetch_btn.config(state=tk.DISABLED)

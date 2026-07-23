@@ -623,7 +623,7 @@ def build_registry(app) -> Dict[str, Tool]:
         for key in list(keys):
             if key not in _platforms(app) and str(key).upper().startswith("GPL"):
                 progress_cb(8.0, f"Loading {key}…")
-                _load_exec(app, {"platform": key, "download": True, "max_gse": 8},
+                _load_exec(app, {"platform": key, "download": True, "max_gse": 0},
                            progress_cb)
         plats = _platforms(app)
         rows, vecs = [], {}
@@ -847,7 +847,7 @@ def build_registry(app) -> Dict[str, Tool]:
     def _load_resolver(app, raw):
         out = dict(raw)
         out.setdefault("download", True)
-        out.setdefault("max_gse", 8)
+        out.setdefault("max_gse", 0)
         return out
 
     def _download_platform(app, key_up, resolved, progress_cb):
@@ -879,8 +879,8 @@ def build_registry(app) -> Dict[str, Tool]:
             max_gse = int(resolved.get("max_gse") or 0)
         except Exception:
             max_gse = 0
-        if max_gse <= 0:
-            max_gse = 8
+        if max_gse < 0:
+            max_gse = 0  # 0 == fetch every GSE series (whole platform)
 
         info = None
         query = getattr(app, "_query_gpl_info_local", None)
@@ -892,8 +892,9 @@ def build_registry(app) -> Dict[str, Tool]:
                 f"{key_up} was not found in the GEO metadata database: {exc}",
                 ok=False)
 
+        scope = f"up to {max_gse} series" if max_gse else "all series"
         progress_cb(20.0,
-                    f"Downloading {key_up} from GEO (up to {max_gse} series)…")
+                    f"Downloading {key_up} from GEO ({scope})…")
 
         def cb(pct, stage, msg):
             try:
@@ -969,14 +970,15 @@ def build_registry(app) -> Dict[str, Tool]:
     tools["load_geo_platform"] = Tool(
         name="load_geo_platform",
         description="Load a GEO/GPL microarray platform into memory so it can be "
-                    "analysed. If the platform isn't already on disk it is "
-                    "downloaded automatically from GEO (bounded by max_gse).",
+                    "analysed. If the platform isn't already on disk the whole "
+                    "platform is downloaded automatically from GEO (every GSE "
+                    "series). Set max_gse only to cap the number of series.",
         params=[
             ToolParam("platform", "str", help="Platform id, e.g. GPL570."),
             ToolParam("download", "bool", required=False, default=True,
                       help="Auto-download from GEO when not found locally."),
-            ToolParam("max_gse", "int", required=False, default=8,
-                      help="Max number of GEO series to fetch when downloading."),
+            ToolParam("max_gse", "int", required=False, default=0,
+                      help="Max GEO series to fetch; 0 = the whole platform."),
         ],
         resolver=_load_resolver, executor=_load_exec,
         examples=("load GPL570", "load the GEO platform GPL96",
@@ -986,7 +988,7 @@ def build_registry(app) -> Dict[str, Tool]:
     def _sc_resolver(app, raw):
         out = dict(raw)
         out.setdefault("organism", "homo_sapiens")
-        out.setdefault("max_cells", 20000)
+        out.setdefault("max_cells", 0)  # 0 == all matching cells (no subsample)
         out.setdefault("name", "scRNA")
         return out
 
@@ -1004,9 +1006,11 @@ def build_registry(app) -> Dict[str, Tool]:
         tissue = resolved.get("tissue") or None
         organism = resolved.get("organism", "homo_sapiens")
         try:
-            max_cells = int(resolved.get("max_cells", 20000))
+            max_cells = int(resolved.get("max_cells") or 0)
         except (TypeError, ValueError):
-            max_cells = 20000
+            max_cells = 0
+        # 0/None → fetch every matching cell so the pseudobulk is unbiased.
+        max_cells = max_cells if max_cells > 0 else None
         progress_cb(15.0, "Querying CELLxGENE Census…")
         client = CensusClient()
         try:
@@ -1166,8 +1170,8 @@ def build_registry(app) -> Dict[str, Tool]:
                       help="Tissue filter, e.g. lung."),
             ToolParam("organism", "str", required=False, default="homo_sapiens",
                       help="Census organism."),
-            ToolParam("max_cells", "int", required=False, default=20000,
-                      help="Cap on cells fetched."),
+            ToolParam("max_cells", "int", required=False, default=0,
+                      help="Optional cap on cells fetched; 0 = all matching cells."),
             ToolParam("name", "str", required=False, default="scRNA",
                       help="Platform name to register under."),
         ],
