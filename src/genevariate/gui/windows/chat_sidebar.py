@@ -1,20 +1,23 @@
 """
 Conversational assistant sidebar for the GeneVariate main window.
 
-A collapsible ``ttk.Frame`` on the right of the main window with two modes:
+A collapsible ``ttk.Frame`` on the right of the main window: one unified
+assistant window (no mode toggle). The user states a goal ("compare TP53
+between single-cell and GEO data") and a full LangChain reasoning agent
+decomposes it, decides which datasets to acquire (auto-downloading GEO
+platforms / fetching single-cell / loading NGS counts as needed), calls the
+analysis tools itself, and narrates each reasoning step live via an animated
+"thinking" strip. When the LLM stack is unavailable it falls back to
+deterministic single-tool keyword routing. Full result tables/reports open in
+a separate results window; the chatbox keeps only a short summary line.
 
-* **Agent** (default when a LangChain + ollama reasoning model is available):
-  the user states a goal ("compare TP53 between single-cell and GEO data") and a
-  full reasoning agent decomposes it, calls the analysis tools itself, narrates
-  its reasoning and each tool result live, and writes a final answer. Falls back
-  to a deterministic heuristic planner when the LLM stack is unavailable.
-* **Confirm**: the classic single-tool safety path — one request routes to ONE
-  tool, a confirmation card shows the **editable** resolved params, and nothing
-  runs until the user clicks *Run*.
-
-Both drive the app's shared progress bar
+It drives the app's shared progress bar
 (``_acquire_progress``/``update_progress``/``_release_progress``); all analysis
 runs on worker threads and is marshalled back with ``self.after(0, ...)``.
+
+The chrome is a self-contained **light dashboard UI** (Frutiger-Aero styled:
+sky-blue surface, blue accent, rounded cards + pill buttons) built from plain
+``tk`` widgets so its palette matches the light main window.
 
 Tk-only here; all analysis lives in ``genevariate.core.chatbot`` (Tk-free).
 """
@@ -37,6 +40,118 @@ except Exception:  # pragma: no cover
     }
 
 
+# ── Light Frutiger-Aero "dashboard" palette ────────────────────────────────
+# Same keys as before (widgets read them by name) but light values so the
+# sidebar matches the main window's sky-blue chrome instead of a dark surface.
+DASH = {
+    "bg":        "#EFF7FD",   # light sky page surface
+    "panel":     "#FFFFFF",   # card surface (white)
+    "panel2":    "#E6F1FB",   # elevated control surface (soft blue)
+    "border":    "#C5DAEA",   # hairline dividers
+    "text":      "#0E2A45",   # primary text (deep navy)
+    "muted":     "#5F7D95",   # secondary text
+    "accent":    "#1E90E0",   # sky-blue primary
+    "accent_hi": "#3AA5EF",   # accent hover (lighter)
+    "accent_dim": "#D6EAF8",  # accent @ low opacity (selection / subtle bg)
+    "user":      "#0A5B9A",   # user message (accent dark)
+    "tool":      "#0E8F82",   # tool / step accent (teal, readable on light)
+    "ok":        "#2E9E5B",   # success (green)
+    "danger":    "#C0392B",   # stop / error (red)
+}
+
+
+def _short(text: Any, n: int = 44) -> str:
+    """Collapse whitespace and truncate for the one-line reasoning strip."""
+    t = " ".join(str(text or "").split())
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+class _PillButton(tk.Canvas):
+    """A rounded (capsule) button drawn on a Canvas, for the sidebar.
+
+    Uses PIL to render an anti-aliased rounded-rectangle background so it gets
+    truly rounded corners (tk buttons cannot). Degrades to a flat rectangle if
+    PIL is unavailable. Supports ``configure(state=...)`` so the existing
+    busy-state logic keeps working unchanged.
+    """
+
+    def __init__(self, master, text="", command=None, *, bg, fg,
+                 hover=None, h=34, pad_x=18, radius=None,
+                 font=("Segoe UI", 10, "bold")):
+        try:
+            parent_bg = master.cget("bg")
+        except Exception:
+            parent_bg = DASH["bg"]
+        self._bg, self._fg = bg, fg
+        self._hover = hover or bg
+        self._cmd = command
+        self._font = font
+        self._enabled = True
+        # NB: ``_w``/``_h`` are reserved by tkinter (widget path etc.); use _pw/_ph.
+        self._ph = h
+        self._radius = radius if radius is not None else h // 2
+        import tkinter.font as tkfont
+        tw = tkfont.Font(font=font).measure(text or "")
+        self._pw = max(tw + 2 * pad_x, h)
+        super().__init__(master, width=self._pw, height=h, highlightthickness=0,
+                         bd=0, bg=parent_bg, cursor="hand2")
+        self._imgs: Dict[str, Any] = {}
+        self._bg_id = None
+        self._draw(bg)
+        self._txt_id = self.create_text(self._pw // 2, h // 2, text=text,
+                                        fill=fg, font=font)
+        self.bind("<Enter>", lambda _e: self._enabled and self._draw(self._hover))
+        self.bind("<Leave>", lambda _e: self._enabled and self._draw(self._bg))
+        self.bind("<Button-1>", self._on_click)
+
+    def _draw(self, color):
+        if color not in self._imgs:
+            img = None
+            try:
+                from PIL import Image, ImageDraw, ImageTk
+                ss = 4
+                W, H = self._pw * ss, self._ph * ss
+                im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                ImageDraw.Draw(im).rounded_rectangle(
+                    [0, 0, W - 1, H - 1], radius=self._radius * ss, fill=color)
+                im = im.resize((self._pw, self._ph), Image.LANCZOS)
+                img = ImageTk.PhotoImage(im)
+            except Exception:
+                img = None
+            self._imgs[color] = img
+        img = self._imgs[color]
+        if img is not None:
+            if self._bg_id is None:
+                self._bg_id = self.create_image(0, 0, anchor="nw", image=img)
+            else:
+                self.itemconfigure(self._bg_id, image=img)
+        else:  # PIL missing → plain rectangle fallback
+            if self._bg_id is None:
+                self._bg_id = self.create_rectangle(
+                    0, 0, self._pw, self._ph, fill=color, outline=color)
+            else:
+                self.itemconfigure(self._bg_id, fill=color, outline=color)
+        if getattr(self, "_txt_id", None) is not None:
+            self.tag_raise(self._txt_id)
+
+    def _on_click(self, _e):
+        if self._enabled and self._cmd:
+            self._cmd()
+
+    def configure(self, **kw):  # honour .configure(state=...)
+        if "state" in kw:
+            self._enabled = kw.pop("state") != tk.DISABLED
+            self.itemconfigure(
+                self._txt_id, fill=(self._fg if self._enabled else DASH["muted"]))
+            self._draw(self._bg if self._enabled else DASH["panel"])
+        if kw:
+            try:
+                super().configure(**kw)
+            except Exception:
+                pass
+    config = configure
+
+
 class ChatSidebar(ttk.Frame):
     """Chat panel embedded in the main window (holds ``self.app``)."""
 
@@ -48,89 +163,123 @@ class ChatSidebar(ttk.Frame):
         self._param_vars: Dict[str, tk.Variable] = {}
         self._busy = False
         self._stop_flag = False            # cooperative agent-run cancel
-        self._mode_var: Optional[tk.StringVar] = None
         self._build()
         self._greet()
 
     # -------------------------------------------------- construction
     def _build(self) -> None:
-        header = ttk.Frame(self)
-        header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
-        ttk.Label(header, text="Assistant",
-                  font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
-        self._mode_lbl = ttk.Label(header, text="", foreground=AERO["muted"])
-        self._mode_lbl.pack(side=tk.RIGHT)
+        D = DASH
+        root = tk.Frame(self, bg=D["bg"])
+        root.pack(fill=tk.BOTH, expand=True)
+        self._root = root
 
-        # mode selector: Agent (autonomous reasoning) vs Confirm (single tool)
-        mode_row = ttk.Frame(self)
-        mode_row.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(0, 2))
-        default_mode = "Agent" if self._agent_ready() else "Confirm"
-        self._mode_var = tk.StringVar(value=default_mode)
-        ttk.Label(mode_row, text="Mode:",
-                  foreground=AERO["muted"]).pack(side=tk.LEFT)
-        ttk.Radiobutton(mode_row, text="Agent", value="Agent",
-                        variable=self._mode_var).pack(side=tk.LEFT, padx=(4, 0))
-        ttk.Radiobutton(mode_row, text="Confirm", value="Confirm",
-                        variable=self._mode_var).pack(side=tk.LEFT, padx=(4, 0))
+        # ── header ──────────────────────────────────────────────
+        header = tk.Frame(root, bg=D["bg"])
+        header.pack(side=tk.TOP, fill=tk.X, padx=14, pady=(14, 6))
+        title_wrap = tk.Frame(header, bg=D["bg"])
+        title_wrap.pack(side=tk.LEFT)
+        tk.Label(title_wrap, text="🤖  AI Assistant", bg=D["bg"], fg=D["text"],
+                 font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(title_wrap, text="Agentic analysis workspace", bg=D["bg"],
+                 fg=D["muted"], font=("Segoe UI", 9)).pack(anchor="w")
+        self._mode_lbl = tk.Label(header, text="", bg=D["bg"], fg=D["muted"],
+                                  font=("Segoe UI", 8))
+        self._mode_lbl.pack(side=tk.RIGHT, anchor="e")
         self._refresh_mode_chip()
 
-        # transcript
-        body = ttk.Frame(self)
-        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=2)
+        # ── transcript card ─────────────────────────────────────
+        card = tk.Frame(root, bg=D["panel"], highlightthickness=1,
+                        highlightbackground=D["border"])
+        card.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=14, pady=2)
         self._transcript = tk.Text(
-            body, wrap=tk.WORD, height=18, width=42, state=tk.DISABLED,
-            background=AERO.get("panel", "#FFFFFF"),
-            foreground=AERO.get("text", "#0E2A45"),
-            relief=tk.FLAT, padx=6, pady=6, font=("Segoe UI", 9))
-        vsb = ttk.Scrollbar(body, orient=tk.VERTICAL,
-                            command=self._transcript.yview)
+            card, wrap=tk.WORD, height=18, width=42, state=tk.DISABLED,
+            bg=D["panel"], fg=D["text"], relief=tk.FLAT, padx=12, pady=10,
+            font=("Segoe UI", 10), insertbackground=D["accent"],
+            selectbackground=D["accent_dim"], selectforeground=D["text"],
+            highlightthickness=0, bd=0)
+        vsb = tk.Scrollbar(card, orient=tk.VERTICAL,
+                           command=self._transcript.yview, bd=0,
+                           bg=D["panel2"], troughcolor=D["panel"],
+                           activebackground=D["accent"], highlightthickness=0,
+                           width=10)
         self._transcript.configure(yscrollcommand=vsb.set)
         self._transcript.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._transcript.tag_configure("user", foreground=AERO["accent_dark"],
-                                       font=("Segoe UI", 9, "bold"))
-        self._transcript.tag_configure("bot", foreground=AERO["text"])
-        self._transcript.tag_configure("sys", foreground=AERO["muted"],
-                                       font=("Segoe UI", 8, "italic"))
-        self._transcript.tag_configure("thought", foreground=AERO["muted"],
-                                       font=("Segoe UI", 9, "italic"))
-        self._transcript.tag_configure("tool", foreground=AERO["accent_dark"],
-                                       font=("Segoe UI", 8, "bold"))
-        self._transcript.tag_configure("final", foreground=AERO["text"],
-                                       font=("Segoe UI", 9, "bold"))
-        self._transcript.tag_configure("report", foreground=AERO["muted"],
+        self._transcript.tag_configure("user", foreground=D["user"],
+                                       font=("Segoe UI", 10, "bold"), spacing3=4)
+        self._transcript.tag_configure("bot", foreground=D["text"], spacing3=6)
+        self._transcript.tag_configure("sys", foreground=D["muted"],
+                                       font=("Segoe UI", 8, "italic"), spacing3=4)
+        self._transcript.tag_configure("thought", foreground=D["muted"],
+                                       font=("Segoe UI", 9, "italic"), spacing3=2)
+        self._transcript.tag_configure("tool", foreground=D["tool"],
+                                       font=("Segoe UI", 9, "bold"), spacing3=2)
+        self._transcript.tag_configure("final", foreground=D["text"],
+                                       font=("Segoe UI", 10, "bold"), spacing3=6)
+        self._transcript.tag_configure("report", foreground=D["muted"],
                                        font=("Consolas", 8))
 
-        # confirmation card (hidden until a tool is proposed)
-        self._card = ttk.LabelFrame(self, text="Confirm action")
-        self._card_body = ttk.Frame(self._card)
-        self._card_body.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
-        btns = ttk.Frame(self._card)
-        btns.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(0, 6))
-        self._run_btn = ttk.Button(btns, text="Run", command=self._on_run)
+        # ── confirmation card (hidden until a tool is proposed) ──
+        self._card = tk.Frame(root, bg=D["panel2"], highlightthickness=1,
+                              highlightbackground=D["accent_dim"])
+        tk.Label(self._card, text="Confirm action", bg=D["panel2"],
+                 fg=D["accent"], font=("Segoe UI", 10, "bold")).pack(
+            side=tk.TOP, anchor="w", padx=12, pady=(8, 2))
+        self._card_body = tk.Frame(self._card, bg=D["panel2"])
+        self._card_body.pack(side=tk.TOP, fill=tk.X, padx=12, pady=4)
+        cbtns = tk.Frame(self._card, bg=D["panel2"])
+        cbtns.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(2, 10))
+        self._run_btn = _PillButton(cbtns, "Run", self._on_run,
+                                    bg=D["accent"], fg="#FFFFFF",
+                                    hover=D["accent_hi"])
         self._run_btn.pack(side=tk.LEFT)
-        ttk.Button(btns, text="Cancel",
-                   command=self._hide_card).pack(side=tk.LEFT, padx=(6, 0))
+        _PillButton(cbtns, "Cancel", self._hide_card, bg=D["panel"],
+                    fg=D["text"], hover=D["border"]).pack(side=tk.LEFT,
+                                                          padx=(8, 0))
 
-        # input row
-        entry_row = ttk.Frame(self)
-        entry_row.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
-        self._entry = ttk.Entry(entry_row)
-        self._entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # ── input bar ───────────────────────────────────────────
+        entry_row = tk.Frame(root, bg=D["bg"])
+        entry_row.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=12)
+        self._entry_row = entry_row
+        entry_wrap = tk.Frame(entry_row, bg=D["panel2"], highlightthickness=1,
+                              highlightbackground=D["border"])
+        entry_wrap.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._entry = tk.Entry(entry_wrap, bg=D["panel2"], fg=D["text"],
+                               insertbackground=D["accent"], relief=tk.FLAT,
+                               bd=0, font=("Segoe UI", 10), highlightthickness=0)
+        self._entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, ipady=8)
         self._entry.bind("<Return>", lambda _e: self._on_send())
-        self._send_btn = ttk.Button(entry_row, text="Send",
-                                    command=self._on_send)
-        self._send_btn.pack(side=tk.LEFT, padx=(6, 0))
-        self._stop_btn = ttk.Button(entry_row, text="Stop",
-                                    command=self._on_stop)
+        self._send_btn = _PillButton(entry_row, "Send", self._on_send,
+                                     bg=D["accent"], fg="#FFFFFF",
+                                     hover=D["accent_hi"])
+        self._send_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._stop_btn = _PillButton(entry_row, "Stop", self._on_stop,
+                                     bg=D["danger"], fg="#FFFFFF",
+                                     hover="#D46464")
         # packed only while an agent run is in flight
 
-        # "View report" opens the latest tool's full markdown analysis in a
-        # scrollable window; hidden until a result carries a report.
-        self._last_report = ""
-        self._last_report_title = "Analysis report"
-        self._report_btn = ttk.Button(self, text="View report",
-                                      command=self._open_report_window)
+        # ── animated "thinking" strip (live reasoning animation) ─
+        self._anim_on = False
+        self._anim_frame = 0
+        self._anim_text = ""
+        self._anim_bar = tk.Frame(root, bg=D["bg"])
+        self._anim_dot = tk.Label(self._anim_bar, text="", bg=D["bg"],
+                                  fg=D["accent"], font=("Segoe UI", 13, "bold"))
+        self._anim_dot.pack(side=tk.LEFT, padx=(16, 6))
+        self._anim_lbl = tk.Label(self._anim_bar, text="", bg=D["bg"],
+                                  fg=D["muted"], font=("Segoe UI", 9, "italic"),
+                                  anchor="w")
+        self._anim_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Full analysis output opens in its OWN window (see _open_results_window);
+        # this button re-opens the latest result window on demand.
+        self._last_result = None
+        self._last_result_title = "Analysis result"
+        self._results_win = None
+        self._report_btn = _PillButton(root, "📄  Open results window",
+                                       self._reopen_results,
+                                       bg=D["panel2"], fg=D["text"],
+                                       hover=D["border"])
 
     # -------------------------------------------------- transcript
     def _append(self, who: str, text: str, tag: str) -> None:
@@ -145,9 +294,8 @@ class ChatSidebar(ttk.Frame):
         self._append("bot",
                      "Tell me a goal and I'll carry out the analysis — e.g. "
                      "“analyse the distribution of TP53 in single-cell and GEO "
-                     "data and compare them”. In Agent mode I reason, pull the "
-                     "data and run the tools for you; in Confirm mode I propose "
-                     "one tool and wait for your OK.", "bot")
+                     "data and compare them”. I reason, pull the data and run "
+                     "the tools for you.", "bot")
 
     def _agent_ready(self) -> bool:
         try:
@@ -188,7 +336,9 @@ class ChatSidebar(ttk.Frame):
         self._entry.delete(0, tk.END)
         self._append("user", prompt, "user")
         self._hide_card()
-        if self._mode_var is not None and self._mode_var.get() == "Agent":
+        # One unified assistant: reason + run the tools when the agent backend
+        # is available, otherwise fall back to single-tool keyword routing.
+        if self._agent_ready():
             self._run_agent_goal(prompt)
         else:
             self._route_single_tool(prompt)
@@ -237,43 +387,53 @@ class ChatSidebar(ttk.Frame):
 
     # -------------------------------------------------- confirmation card
     def _show_card(self, tool, resolved: Dict[str, Any]) -> None:
+        D = DASH
         for w in self._card_body.winfo_children():
             w.destroy()
         self._param_vars.clear()
         self._pending_tool = tool
 
-        ttk.Label(self._card_body, text=tool.description,
-                  wraplength=300, foreground=AERO["muted"]).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        tk.Label(self._card_body, text=tool.description, wraplength=300,
+                 justify="left", bg=D["panel2"], fg=D["muted"],
+                 font=("Segoe UI", 9)).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
         row = 1
         for p in tool.params:
-            ttk.Label(self._card_body, text=p.name).grid(
-                row=row, column=0, sticky="w", padx=(0, 6), pady=1)
+            tk.Label(self._card_body, text=p.name, bg=D["panel2"], fg=D["text"],
+                     font=("Segoe UI", 9)).grid(
+                row=row, column=0, sticky="w", padx=(0, 8), pady=2)
             val = resolved.get(p.name, "" if p.default is None else p.default)
             if p.type == "bool":
                 var = tk.BooleanVar(value=bool(val))
-                ttk.Checkbutton(self._card_body, variable=var).grid(
-                    row=row, column=1, sticky="w", pady=1)
+                tk.Checkbutton(self._card_body, variable=var, bg=D["panel2"],
+                               activebackground=D["panel2"],
+                               selectcolor=D["panel"], bd=0,
+                               highlightthickness=0).grid(
+                    row=row, column=1, sticky="w", pady=2)
             elif p.choices:
                 var = tk.StringVar(value=str(val))
                 ttk.Combobox(self._card_body, textvariable=var,
                              values=list(p.choices), width=24,
                              state="readonly").grid(
-                    row=row, column=1, sticky="we", pady=1)
+                    row=row, column=1, sticky="we", pady=2)
             else:
                 var = tk.StringVar(value="" if val is None else str(val))
-                ttk.Entry(self._card_body, textvariable=var, width=26).grid(
-                    row=row, column=1, sticky="we", pady=1)
+                tk.Entry(self._card_body, textvariable=var, width=26,
+                         bg=D["panel"], fg=D["text"], insertbackground=D["accent"],
+                         relief=tk.FLAT, bd=0, highlightthickness=1,
+                         highlightbackground=D["border"],
+                         highlightcolor=D["accent"]).grid(
+                    row=row, column=1, sticky="we", pady=2, ipady=3)
             self._param_vars[p.name] = var
             row += 1
         self._card_body.columnconfigure(1, weight=1)
-        self._card.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4,
+        self._card.pack(side=tk.TOP, fill=tk.X, padx=14, pady=4,
                         before=self._entry_parent())
 
     def _entry_parent(self):
-        # the entry row is the last child packed at the bottom
-        return self._entry.master
+        # the input row (a direct child of self._root) — used as a pack anchor
+        return self._entry_row
 
     def _hide_card(self) -> None:
         self._pending_tool = None
@@ -342,55 +502,131 @@ class ChatSidebar(ttk.Frame):
         if result is None:
             self._append("bot", "Done (no result).", "bot")
             return
+        # Keep the chatbox to a short line; the full output opens in its own window.
         self._append("bot", result.summary, "bot")
-        self._append_table(result)
-        self._offer_report(result)
+        self._present_result(result)
 
-    def _append_table(self, result) -> None:
-        table = getattr(result, "table", None)
-        if table is not None:
-            try:
-                preview = table.head(8).to_string(max_cols=6)
-                self._append("sys", preview, "sys")
-            except Exception:
-                pass
-
-    def _offer_report(self, result) -> None:
-        """Surface a tool's markdown analysis: preview inline + open-in-window."""
-        report = getattr(result, "report", "") or ""
-        if not report.strip():
-            return
-        self._last_report = report
-        title = str(getattr(result, "summary", "") or "Analysis report")
-        self._last_report_title = title[:60]
-        preview = report.strip().splitlines()
-        head = "\n".join(preview[:8])
-        if len(preview) > 8:
-            head += "\n…"
-        self._append("report", head, "report")
+    def _present_result(self, result) -> None:
+        """Open the full analysis output (summary + table + report) in a
+        separate results window instead of crowding the small chatbox."""
+        # A newly-learned tool means the registry gained a member — drop the
+        # cache so the next request (and agent run) picks it up.
         try:
-            self._report_btn.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 4),
-                                  before=self._entry.master)
+            if getattr(result, "payload", {}).get("_registry_dirty"):
+                self._registry = None
+        except Exception:
+            pass
+        table = getattr(result, "table", None)
+        report = (getattr(result, "report", "") or "").strip()
+        has_table = (table is not None and hasattr(table, "empty")
+                     and not table.empty)
+        if not has_table and not report:
+            return  # only a summary line — the chatbox message is enough
+        self._last_result = result
+        self._last_result_title = str(
+            getattr(result, "summary", "") or "Analysis result")[:70]
+        self._open_results_window(result)
+        self._append("sys", "↑ full results opened in a separate window.", "sys")
+        try:
+            self._report_btn.pack(side=tk.BOTTOM, fill=tk.X, padx=14,
+                                  pady=(0, 4), before=self._entry_row)
         except Exception:
             pass
 
-    def _open_report_window(self) -> None:
-        if not self._last_report.strip():
-            return
-        win = tk.Toplevel(self)
-        win.title(self._last_report_title)
-        win.geometry("640x560")
-        frame = ttk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        txt = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10),
-                      background=AERO.get("panel", "#FFFFFF"),
-                      foreground=AERO.get("text", "#0E2A45"),
-                      relief=tk.FLAT, padx=8, pady=8)
-        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=txt.yview)
-        txt.configure(yscrollcommand=vsb.set)
-        txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        txt.insert(tk.END, self._last_report)
+    def _reopen_results(self) -> None:
+        if self._last_result is not None:
+            self._open_results_window(self._last_result)
+
+    def _open_results_window(self, result) -> None:
+        """Build (or refocus) a Toplevel showing the summary, the full result
+        table and the markdown report for one analysis."""
+        D = DASH
+        # Refocus an existing window rather than stacking duplicates.
+        win = self._results_win
+        try:
+            if win is not None and win.winfo_exists():
+                win.lift()
+                win.focus_force()
+            else:
+                win = None
+        except Exception:
+            win = None
+        # Release the previous embedded figure/canvas before we rebuild, so
+        # matplotlib Figures don't accumulate across successive analyses.
+        old_canvas = getattr(self, "_results_canvas", None)
+        if old_canvas is not None:
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(old_canvas.figure)
+            except Exception:
+                pass
+            self._results_canvas = None
+        if win is None:
+            win = tk.Toplevel(self)
+            self._results_win = win
+        else:
+            for c in win.winfo_children():
+                c.destroy()
+        win.title(self._last_result_title or "Analysis result")
+        win.geometry("760x640")
+        win.configure(bg=D["bg"])
+
+        header = tk.Label(win, text=str(getattr(result, "summary", "") or ""),
+                          bg=D["bg"], fg=D["text"], wraplength=720,
+                          justify="left", font=("Segoe UI", 12, "bold"))
+        header.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(12, 6))
+
+        # Embed the analysis chart (histogram / overlay / enrichment bar) when
+        # the tool produced one — the assistant both shows and interprets it.
+        figure = getattr(result, "figure", None)
+        if figure is not None:
+            try:
+                from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                fig_frame = tk.Frame(win, bg=D["bg"])
+                fig_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 6))
+                canvas = FigureCanvasTkAgg(figure, master=fig_frame)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill=tk.X, expand=False)
+                self._results_canvas = canvas  # keep a ref so it isn't GC'd
+            except Exception:
+                pass
+
+        frame = tk.Frame(win, bg=D["panel"], highlightthickness=1,
+                         highlightbackground=D["border"])
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        txt = tk.Text(frame, wrap=tk.NONE, font=("Consolas", 10),
+                      bg=D["panel"], fg=D["text"], relief=tk.FLAT,
+                      padx=10, pady=10, insertbackground=D["accent"],
+                      selectbackground=D["accent_dim"], highlightthickness=0,
+                      bd=0)
+        vsb = tk.Scrollbar(frame, orient=tk.VERTICAL, command=txt.yview, bd=0,
+                           bg=D["panel2"], troughcolor=D["panel"],
+                           activebackground=D["accent"], highlightthickness=0,
+                           width=10)
+        hsb = tk.Scrollbar(frame, orient=tk.HORIZONTAL, command=txt.xview, bd=0,
+                           bg=D["panel2"], troughcolor=D["panel"],
+                           activebackground=D["accent"], highlightthickness=0,
+                           width=10)
+        txt.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        txt.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        txt.tag_configure("h", foreground=D["accent"],
+                          font=("Segoe UI", 11, "bold"), spacing1=8, spacing3=4)
+
+        table = getattr(result, "table", None)
+        if table is not None and hasattr(table, "empty") and not table.empty:
+            txt.insert(tk.END, "RESULT TABLE\n", "h")
+            try:
+                txt.insert(tk.END, table.to_string() + "\n\n")
+            except Exception:
+                txt.insert(tk.END, repr(table) + "\n\n")
+        report = (getattr(result, "report", "") or "").strip()
+        if report:
+            txt.insert(tk.END, "REPORT\n", "h")
+            txt.insert(tk.END, report + "\n")
         txt.configure(state=tk.DISABLED)
 
     # -------------------------------------------------- agent mode
@@ -515,19 +751,64 @@ class ChatSidebar(ttk.Frame):
     def _agent_event(self, kind: str, text: str, result) -> None:
         if kind == "thought":
             self._append("thought", text, "thought")
+            self._set_anim("Reasoning: " + _short(text))
         elif kind in ("tool_start", "step_start"):
             self._append("tool", f"→ {text}", "tool")
+            self._set_anim("Running " + _short(text))
         elif kind in ("tool_result", "step_result"):
             self._append("bot", text, "bot")
+            self._set_anim("Reviewing result…")
             if result is not None:
-                self._append_table(result)
-                self._offer_report(result)
+                self._present_result(result)
         elif kind in ("tool_error", "step_error"):
             self._append("bot", f"⚠ {text}", "bot")
         elif kind == "final":
             self._append("final", text, "final")
         else:  # "start" / "sys" / anything else
             self._append("sys", text, "sys")
+            self._set_anim(_short(text))
+
+    # -------------------------------------------------- animation
+    _SPIN = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def _start_anim(self, text: str = "") -> None:
+        self._anim_text = text or "Thinking"
+        if not self._anim_on:
+            self._anim_on = True
+            try:
+                self._anim_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 2),
+                                    before=self._entry_row)
+            except Exception:
+                pass
+            self._tick_anim()
+
+    def _set_anim(self, text: str) -> None:
+        self._anim_text = text
+        if not self._anim_on:
+            self._start_anim(text)
+
+    def _stop_anim(self) -> None:
+        self._anim_on = False
+        try:
+            self._anim_bar.pack_forget()
+        except Exception:
+            pass
+
+    def _tick_anim(self) -> None:
+        if not self._anim_on:
+            return
+        self._anim_frame = (self._anim_frame + 1) % 100000
+        f = self._anim_frame
+        spin = self._SPIN[f % len(self._SPIN)]
+        # gentle accent pulse between accent and accent_hi
+        color = DASH["accent"] if (f // 3) % 2 else DASH["accent_hi"]
+        dots = "." * (1 + (f // 3) % 3)
+        try:
+            self._anim_dot.configure(text=spin, fg=color)
+            self._anim_lbl.configure(text=f"{self._anim_text}{dots}")
+        except Exception:
+            return
+        self.after(90, self._tick_anim)
 
     def _show_stop(self, show: bool) -> None:
         if show:
@@ -548,5 +829,9 @@ class ChatSidebar(ttk.Frame):
         self._entry.configure(state=state)
         self._send_btn.configure(state=state)
         self._run_btn.configure(state=state)
+        if busy:
+            self._start_anim(note or "Thinking")
+        else:
+            self._stop_anim()
         if busy and note:
             self._append("sys", note, "sys")

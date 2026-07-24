@@ -18,41 +18,9 @@ except ImportError:
 
 # ═══════════════════════════════════════════════════════════════
 #  FRUTIGER AERO PALETTE — glossy white + sky-blue + nature-green
-#  Matches the CellTracker desktop_gui aesthetic.
+#  Defined in gui/theme.py so the secondary windows share it.
 # ═══════════════════════════════════════════════════════════════
-AERO = {
-    "bg":            "#FFFFFF",
-    "bg_top":        "#EAF6FE",   # sky gradient top
-    "bg_mid":        "#FFFFFF",
-    "bg_bot":        "#F4FBF2",   # nature gradient bottom
-    "panel":         "#FFFFFF",
-    "panel_top":     "#FCFEFF",   # glossy highlight
-    "panel_bot":     "#EDF7FF",   # reflected-sky base
-    "border":        "#C5DAEA",
-    "border_soft":   "#E0EEF7",
-    "text":          "#0E2A45",
-    "muted":         "#5F7D95",
-    # sky (primary)
-    "accent":        "#1E90E0",
-    "accent_dark":   "#0A5B9A",
-    "accent_light":  "#B9E3FA",
-    "sky_top":       "#6DC8F3",
-    "sky_bot":       "#2B8BD6",
-    # nature (secondary)
-    "green":         "#4CAF50",
-    "green_dark":    "#2E7D32",
-    "green_light":   "#C9EFC7",
-    "leaf_top":      "#8FD98F",
-    "leaf_bot":      "#3FAA45",
-    # states
-    "success":       "#2E7D32",
-    "danger":        "#C0392B",
-    "danger_hover":  "#9E2B1F",
-    "warn":          "#E67E22",
-    "hover_sky":     "#E8F5FD",
-    "pressed_sky":   "#BFE1F6",
-    "glass_hilite":  "#F4FAFE",
-}
+from genevariate.gui.theme import AERO
 
 
 def _aero_vertical_gradient(canvas, width, height, top, bottom, tag="aero_bg"):
@@ -2620,7 +2588,7 @@ def _detect_ollama_model():
 
 _OLLAMA_MODEL = None  # cached (collapse model: gemma4:e2b)
 _OLLAMA_EXTRACTION_MODEL = None  # cached (fast extraction model: gemma4:e2b)
-_OLLAMA_URL = "http://localhost:11434"
+_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
 def _detect_extraction_model():
@@ -7136,10 +7104,10 @@ class CompareDistributionsWindow(tk.Toplevel):
             highlight_x = X_2d[idx, 0]
             highlight_y = X_2d[idx, 1]
 
-            # Draw orange-ringed markers over selected points
+            # Draw purple-ringed markers over selected points
             sc = ax.scatter(
                 highlight_x, highlight_y,
-                s=120, facecolors='none', edgecolors='#FF6D00',
+                s=120, facecolors='none', edgecolors='#7B1FA2',
                 linewidths=2.5, zorder=10, label='_brushed')
             self._brush_highlights.setdefault(key, []).append(sc)
 
@@ -7170,7 +7138,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                         for v in brush_vals:
                             line = dist_ax.axvline(
                                 v, ymin=0, ymax=0.06,
-                                color='#FF6D00', linewidth=2,
+                                color='#7B1FA2', linewidth=2,
                                 alpha=0.8, zorder=10)
                             arts.append(line)
                         self._brush_highlights.setdefault(
@@ -7290,7 +7258,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                 for j, c in enumerate(all_c):
                     contingency[i, j] = ((L == label) & (cluster_ids == c)).sum()
 
-            im = ax2.imshow(contingency, aspect='auto', cmap='YlOrRd')
+            im = ax2.imshow(contingency, aspect='auto', cmap='Blues')
             c_labels = [f"C{c}" if c != -1 else "Noise" for c in all_c]
             ax2.set_xticks(range(len(all_c)))
             ax2.set_xticklabels(c_labels)
@@ -7403,7 +7371,7 @@ class CompareDistributionsWindow(tk.Toplevel):
                 for ci in range(k_val):
                     contingency[i, ci] = ((L == label) & (cluster_ids == ci)).sum()
 
-            im = ax2.imshow(contingency, aspect='auto', cmap='YlOrRd')
+            im = ax2.imshow(contingency, aspect='auto', cmap='Blues')
             ax2.set_xticks(range(k_val))
             ax2.set_xticklabels([f"C{i}" for i in range(k_val)])
             ax2.set_yticks(range(len(uL)))
@@ -10203,6 +10171,31 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                   background=[('active', AERO["hover_sky"]),
                               ('pressed', AERO["pressed_sky"])])
 
+        # ── Rounded "pill" restyle (CopilotKit-inspired capsules) ──────────
+        # ttk's clam theme paints square-cornered buttons. We overlay each
+        # named style with a 9-slice, PIL-rendered rounded-capsule image so
+        # every existing ttk.Button becomes a smooth pill — no call-site
+        # changes. Semantic colors + hover/pressed states are preserved.
+        # Wrapped in try/except: if imaging is unavailable the app simply
+        # keeps the original (square) styles.
+        try:
+            self._install_pill_button_styles(style)
+        except Exception as _pill_err:  # pragma: no cover - visual nicety only
+            try:
+                print(f"[UI] pill-button restyle skipped: {_pill_err}")
+            except Exception:
+                pass
+
+        # Round the *containers* too (cards / fields / tabs) so the whole GUI
+        # reads soft instead of angular — same PIL 9-slice trick as the pills.
+        try:
+            self._install_rounded_container_styles(style)
+        except Exception as _round_err:  # pragma: no cover - visual nicety only
+            try:
+                print(f"[UI] rounded-container restyle skipped: {_round_err}")
+            except Exception:
+                pass
+
         # ── Entries / comboboxes ─────────────────────────────────
         style.configure("TEntry",
                         fieldbackground="#FFFFFF",
@@ -10311,7 +10304,233 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
         style.map("Treeview",
                   background=[('selected', AERO["accent_light"])],
                   foreground=[('selected', AERO["accent_dark"])])
-    
+
+    def _install_pill_button_styles(self, style):
+        """Re-skin the named ttk button styles as rounded capsule 'pills'.
+
+        ttk's clam theme paints square corners. We render anti-aliased
+        rounded-rectangle images with PIL and register them as horizontal
+        9-slice ttk image elements (rounded left/right caps stay fixed, the
+        middle stretches), so every existing ``ttk.Button`` keeps its semantic
+        color + hover/pressed states but gains fully rounded corners in the
+        style of the CopilotKit capsule buttons. Generated PhotoImages are
+        retained on ``self`` so Tk cannot garbage-collect them.
+        """
+        from PIL import Image, ImageDraw, ImageTk
+
+        self._pill_imgs = getattr(self, "_pill_imgs", [])
+
+        def _clamp(v):
+            return max(0, min(255, int(v)))
+
+        def _shade(hex_color, factor):
+            """factor < 1 darkens, > 1 lightens; returns an (r, g, b) tuple."""
+            h = hex_color.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return (_clamp(r * factor), _clamp(g * factor), _clamp(b * factor))
+
+        def _rgba(hex_color, a=255):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), a)
+
+        def _pill_image(h, fill_hex, radius, border_rgb=None, border_px=0):
+            """Horizontal 9-slice rounded rect. Returns (photo, cap).
+
+            ``radius`` is the corner radius in px (capped at h/2). The left/right
+            fixed 9-slice caps equal that radius, so the child label is inset by
+            only ~radius on each side — keeping room for text on narrow buttons.
+            """
+            ss = 4  # supersample for smooth anti-aliased edges
+            cap = max(2, min(int(radius), h // 2))   # fixed left/right slice
+            w = 2 * cap + 8                          # caps + ~8px stretch center
+            W, H = w * ss, h * ss
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            outline = (_rgba('%02x%02x%02x' % border_rgb)
+                       if border_rgb else None)
+            d.rounded_rectangle([0, 0, W - 1, H - 1], radius=cap * ss,
+                                fill=_rgba(fill_hex), outline=outline,
+                                width=(border_px * ss if border_rgb else 0))
+            img = img.resize((w, h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._pill_imgs.append(photo)
+            return photo, cap
+
+        def _hex_rgb(hex_color):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+        def _skin(name, fill, fg, edge, hover, pressed, font, pad_x, h):
+            """Outline-pill skin: light fill + thin coloured border + coloured
+            text (matches the reference 'Refresh' capsule). ``edge``/``fg`` carry
+            the semantic colour; the fill stays light so the text/border read."""
+            rad = h // 2                       # full capsule
+            edge_rgb = _hex_rgb(edge)
+            normal_img, cap = _pill_image(h, fill, rad, edge_rgb, 1)
+            hover_img, _ = _pill_image(h, hover, rad, edge_rgb, 1)
+            press_img, _ = _pill_image(h, pressed, rad, edge_rgb, 1)
+            dis_fill = AERO["border_soft"]
+            dis_img, _ = _pill_image(h, dis_fill, rad, _shade(dis_fill, 0.9), 1)
+            elem = "pill_" + name.replace('.', '_')
+            try:
+                style.element_create(
+                    elem, "image", normal_img,
+                    ("pressed", press_img),
+                    ("active", hover_img),
+                    ("disabled", dis_img),
+                    border=(cap, 0, cap, 0), sticky="nsew", height=h)
+            except Exception:
+                return  # element exists already / imaging unsupported -> keep square
+            style.layout(name, [
+                (elem, {"sticky": "nsew", "children": [
+                    ("Button.padding", {"sticky": "nsew", "children": [
+                        ("Button.label", {"sticky": "nsew"})]})]})])
+            # Reset the leftover solid ``background`` from the base style so no
+            # square colour band shows through the pill's transparent corners —
+            # the capsule floats directly on the container colour.
+            bg = AERO["bg_top"]
+            style.configure(name, font=font, foreground=fg, background=bg,
+                            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                            focuscolor=bg, padding=(max(2, pad_x), 2),
+                            anchor="center", relief="flat", borderwidth=0)
+            # Outline style keeps coloured text in every state (never white);
+            # background stays the container colour so the corners never fill.
+            style.map(name,
+                      foreground=[('disabled', AERO["muted"]),
+                                  ('pressed', fg), ('active', fg)],
+                      background=[('disabled', bg), ('pressed', bg),
+                                  ('active', bg), ('!active', bg)],
+                      bordercolor=[('focus', bg), ('active', bg)],
+                      lightcolor=[('pressed', bg), ('active', bg)],
+                      darkcolor=[('pressed', bg), ('active', bg)])
+
+        A = AERO
+        WHITE = "#FFFFFF"
+        # Outline-pill palette (blue/green as before): white fill, coloured
+        # border + coloured text; hover/pressed are faint tints of that colour.
+        # (style, fill, fg/text, border, hover, pressed, font, pad_x, height)
+        specs = [
+            ("TButton",             WHITE, A["accent_dark"], A["border"],  A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10),         12, 32),
+            ("Add.TButton",         WHITE, A["green_dark"],  A["green"],    A["green_light"], "#B8E6B6",      ('Segoe UI', 11, 'bold'), 16, 38),
+            ("Action.TButton",      WHITE, A["accent_dark"], A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10, 'bold'), 16, 38),
+            ("Primary.TButton",     WHITE, A["accent"],      A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10, 'bold'), 18, 36),
+            ("Secondary.TButton",   WHITE, A["accent_dark"], A["border"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 10),         14, 32),
+            ("Destructive.TButton", WHITE, A["danger"],      A["danger"],   "#FBE9E7",      "#F5CDC8",        ('Segoe UI', 10, 'bold'), 14, 32),
+            ("Warn.TButton",        WHITE, "#9A4A06",        A["warn"],     "#FDF0E4",      "#F7DFC6",        ('Segoe UI', 10, 'bold'), 14, 32),
+            ("Tool.TButton",        WHITE, A["accent_dark"], A["accent"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9, 'bold'),   2, 34),
+            ("ToolGreen.TButton",   WHITE, A["green_dark"],  A["green"],    A["green_light"], "#B8E6B6",      ('Segoe UI', 9, 'bold'),   2, 34),
+            ("ToolWarn.TButton",    WHITE, "#9A4A06",        A["warn"],     "#FDF0E4",      "#F7DFC6",        ('Segoe UI', 9, 'bold'),   2, 34),
+            ("Toggle.TButton",      WHITE, A["accent_dark"], A["border"],   A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9, 'bold'),   8, 26),
+            ("Ghost.TButton",       WHITE, A["accent_dark"], A["border_soft"], A["hover_sky"], A["pressed_sky"], ('Segoe UI', 9),       8, 26),
+        ]
+        for spec in specs:
+            _skin(*spec)
+
+    def _install_rounded_container_styles(self, style):
+        """Round the *container* chrome — LabelFrame cards, Entry/Combobox
+        fields and Notebook tabs — with the same anti-aliased PIL 9-slice
+        images used for the pill buttons, so the whole GUI reads soft instead
+        of angular. Each family is wrapped in its own try/except: any failure
+        keeps that widget's original square style, and generated PhotoImages
+        are retained on ``self`` so Tk cannot garbage-collect them.
+        """
+        from PIL import Image, ImageDraw, ImageTk
+
+        self._round_imgs = getattr(self, "_round_imgs", [])
+        A = AERO
+
+        def _rgba(hex_color, a=255):
+            h = hex_color.lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), a)
+
+        def _card_image(fill_hex, radius, border_hex=None, border_px=1,
+                        round_bottom=True):
+            """Four-corner (or top-only) rounded-rect 9-slice. Returns (photo, r)."""
+            ss = 4
+            r = max(3, int(radius))
+            pad = border_px + 1
+            w = h = 2 * r + 8                       # fixed corners + small centre
+            W, H = w * ss, h * ss
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            outline = _rgba(border_hex) if border_hex else None
+            box = [pad * ss, pad * ss, W - 1 - pad * ss, H - 1 - pad * ss]
+            d.rounded_rectangle(box, radius=r * ss, fill=_rgba(fill_hex),
+                                outline=outline,
+                                width=(border_px * ss if outline else 0))
+            if not round_bottom:
+                # square off the lower half (tabs sit flush on the notebook body)
+                d.rectangle([box[0], (H // 2), box[2], box[3]],
+                            fill=_rgba(fill_hex),
+                            outline=outline,
+                            width=(border_px * ss if outline else 0))
+            img = img.resize((w, h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._round_imgs.append(photo)
+            return photo, r
+
+        # ── LabelFrame → rounded card (border blends with the page fill) ──────
+        try:
+            card_img, r = _card_image(A["bg_top"], 14, A["border"], 1)
+            style.element_create("Rounded.Labelframe.border", "image", card_img,
+                                 border=(r, r, r, r), sticky="nsew")
+            style.layout("TLabelframe",
+                         [("Rounded.Labelframe.border", {"sticky": "nsew"})])
+            style.configure("TLabelframe", background=A["bg_top"])
+        except Exception:
+            pass
+
+        # ── Entry → rounded white field ──────────────────────────────────────
+        try:
+            e_norm, er = _card_image("#FFFFFF", 10, A["border"], 1)
+            e_foc, _ = _card_image("#FFFFFF", 10, A["accent"], 1)
+            style.element_create("Rounded.Entry.field", "image", e_norm,
+                                 ("focus", e_foc),
+                                 border=(er, er, er, er), sticky="nsew")
+            style.layout("TEntry", [
+                ("Rounded.Entry.field", {"sticky": "nsew", "children": [
+                    ("Entry.padding", {"sticky": "nsew", "children": [
+                        ("Entry.textarea", {"sticky": "nsew"})]})]})])
+            style.configure("TEntry", padding=(8, 5))
+        except Exception:
+            pass
+
+        # ── Combobox → rounded white field (keep the dropdown arrow) ─────────
+        try:
+            c_norm, cr = _card_image("#FFFFFF", 10, A["border"], 1)
+            c_foc, _ = _card_image("#FFFFFF", 10, A["accent"], 1)
+            style.element_create("Rounded.Combobox.field", "image", c_norm,
+                                 ("focus", c_foc),
+                                 border=(cr, cr, cr, cr), sticky="nsew")
+            style.layout("TCombobox", [
+                ("Rounded.Combobox.field", {"sticky": "nsew", "children": [
+                    ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                    ("Combobox.padding", {"sticky": "nsew", "children": [
+                        ("Combobox.textarea", {"sticky": "nsew"})]})]})])
+            style.configure("TCombobox", padding=(8, 5))
+        except Exception:
+            pass
+
+        # ── Notebook tabs → rounded tops ─────────────────────────────────────
+        try:
+            t_norm, tr = _card_image(A["panel_bot"], 10, A["border"], 1,
+                                     round_bottom=False)
+            t_sel, _ = _card_image("#FFFFFF", 10, A["border"], 1,
+                                   round_bottom=False)
+            t_act, _ = _card_image(A["hover_sky"], 10, A["border"], 1,
+                                   round_bottom=False)
+            style.element_create("Rounded.Notebook.tab", "image", t_norm,
+                                 ("selected", t_sel), ("active", t_act),
+                                 border=(tr, tr, tr, 2), sticky="nsew")
+            style.layout("TNotebook.Tab", [
+                ("Rounded.Notebook.tab", {"sticky": "nsew", "children": [
+                    ("Notebook.padding", {"side": "top", "sticky": "nsew",
+                                          "children": [
+                        ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+            style.configure("TNotebook.Tab", padding=(16, 6))
+        except Exception:
+            pass
+
     def _load_persistent_cache(self):
         """Load GSE context cache from disk (survives restarts).
         Checks new path first, falls back to old agent_memory/ location."""
@@ -10493,8 +10712,8 @@ class GeoWorkflowGUI(ctk.CTk if _HAS_CTK else tk.Tk):
                               command=self._open_enrichment_window)
         tools_menu.add_command(label="Discover Pseudo-Cohorts (embeddings)...",
                               command=self._open_pseudo_cohorts_window)
-        tools_menu.add_command(label="RNA-seq DE (raw counts)...",
-                              command=self._open_rnaseq_de)
+        tools_menu.add_command(label="Activity Inference (TF / pathway)...",
+                              command=self._open_activity_inference)
         tools_menu.add_separator()
         tools_menu.add_command(label="Assistant (chat)...",
                               accelerator="Ctrl+/",
@@ -11085,13 +11304,9 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             header_canvas.create_rectangle(
                 0, header_height - 3, w, header_height,
                 fill=AERO["accent"], outline="", tags="aero_underline")
-            # Keep the AI-assistant button pinned to the top-right corner.
-            btn_win = getattr(self, "_agent_btn_win", None)
-            if btn_win is not None:
-                try:
-                    header_canvas.coords(btn_win, w - 18, header_height // 2)
-                except Exception:
-                    pass
+            # Keep the AI-assistant launcher (icon + label) pinned to the
+            # top-right corner.
+            self._place_agent_launcher(w)
             # Re-raise the foreground (logo + titles) above the freshly
             # painted background so the repaint on resize doesn't bury them.
             try:
@@ -11131,20 +11346,37 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # "Assistant (chat)…" and Ctrl+/). Embedded as a canvas window item so
         # it floats over the glossy header; _paint_header keeps it anchored to
         # the right edge on every resize.
-        self._agent_btn = tk.Button(
-            header_canvas, text="🤖  AI Assistant",
-            font=("Segoe UI", 11, "bold"),
-            fg="#FFFFFF", bg=AERO["accent_dark"],
-            activebackground=AERO["accent"], activeforeground="#FFFFFF",
-            relief="flat", bd=0, padx=16, pady=7, cursor="hand2",
-            highlightthickness=0, command=self._toggle_chat_sidebar)
-        self._agent_btn.bind(
-            "<Enter>", lambda e: self._agent_btn.config(bg=AERO["accent"]))
-        self._agent_btn.bind(
-            "<Leave>", lambda e: self._agent_btn.config(bg=AERO["accent_dark"]))
-        self._agent_btn_win = header_canvas.create_window(
-            (self.winfo_width() or 1200) - 18, header_height // 2,
-            anchor="e", window=self._agent_btn, tags="aero_header_fg")
+        # Frameless launcher: the branded chatbot icon (speech bubble + DNA
+        # helix + AI sparkle) and the "AI Assistant" label are drawn straight
+        # onto the header gradient as canvas items — no button widget, so there
+        # is no box, just the moving icon + text. _paint_header re-anchors them
+        # to the right edge on resize; the icon bobs/wobbles via an after timer.
+        self._agent_header_canvas = header_canvas
+        self._build_agent_icon_frames(size=30)
+        cy = header_height // 2
+        self._agent_text_item = header_canvas.create_text(
+            0, cy, text="AI Assistant", anchor="e",
+            font=("Segoe UI", 12, "bold"), fill=AERO["accent_dark"],
+            tags=("aero_header_fg", "agent_launcher"))
+        self._agent_icon_item = header_canvas.create_image(
+            0, cy, anchor="e", tags=("aero_header_fg", "agent_launcher"))
+        if self._agent_icon_frames:
+            header_canvas.itemconfig(self._agent_icon_item,
+                                     image=self._agent_icon_frames[0])
+        self._place_agent_launcher(self.winfo_width() or 1200)
+        header_canvas.tag_bind("agent_launcher", "<Button-1>",
+                               lambda e: self._toggle_chat_sidebar())
+        header_canvas.tag_bind(
+            "agent_launcher", "<Enter>",
+            lambda e: (header_canvas.itemconfig(self._agent_text_item,
+                                                fill=AERO["accent"]),
+                       header_canvas.config(cursor="hand2")))
+        header_canvas.tag_bind(
+            "agent_launcher", "<Leave>",
+            lambda e: (header_canvas.itemconfig(self._agent_text_item,
+                                                fill=AERO["accent_dark"]),
+                       header_canvas.config(cursor="")))
+        self._start_agent_icon_anim()
 
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, padx=5, pady=2)
@@ -11251,7 +11483,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         
         tools_btn_frame = ttk.Frame(tools_frame)
         tools_btn_frame.pack(fill=tk.X, pady=4)
-        tools_btn_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="toolbtn")
+        tools_btn_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="toolbtn")
 
         self.gene_explorer_btn = ttk.Button(
             tools_btn_frame, text="Gene Distribution Explorer",
@@ -11261,27 +11493,20 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         self._set_tooltip(self.gene_explorer_btn,
                           "Interactive histograms & KDEs of gene expression across loaded platforms.")
 
-        self.compare_btn = ttk.Button(
-            tools_btn_frame, text="Compare Distributions",
-            command=self.open_compare_window,
-            style="ToolWarn.TButton")
-        self.compare_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.compare_btn,
-                          "Compare two or more gene / sample distributions with KDE, PCA/UMAP and clustering.")
-
-        self.dist_class_btn = ttk.Button(
-            tools_btn_frame, text="Distribution Classification",
-            command=self._open_dist_classification,
+        self.dist_analysis_btn = ttk.Button(
+            tools_btn_frame, text="Distribution Analysis",
+            command=self._open_distribution_analysis,
             style="ToolGreen.TButton")
-        self.dist_class_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.dist_class_btn,
-                          "Classify distributions (unimodal / bimodal / skew) and compute variability metrics.")
+        self.dist_analysis_btn.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
+        self._set_tooltip(self.dist_analysis_btn,
+                          "Compare distributions (KDE, PCA/UMAP, clustering) or classify them "
+                          "(unimodal / bimodal / skew + variability metrics).")
 
         self.label_enrich_btn = ttk.Button(
             tools_btn_frame, text="Label Enrichment",
             command=self._open_label_enrichment,
             style="Tool.TButton")
-        self.label_enrich_btn.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
+        self.label_enrich_btn.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
         self._set_tooltip(self.label_enrich_btn,
                           "Fisher / hypergeometric enrichment of LLM-extracted labels across genes / distributions / platforms.")
 
@@ -11289,22 +11514,11 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             tools_btn_frame, text="Single-cell (CELLxGENE)",
             command=self._open_cellxgene_browser,
             style="Tool.TButton")
-        self.cellxgene_btn.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
+        self.cellxgene_btn.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
         self._set_tooltip(self.cellxgene_btn,
                           "Browse and fetch single-cell RNA-seq data from the CELLxGENE Discover Census "
                           "(real public scRNA-seq submissions). Pseudo-bulk the result to use it in every other window, "
                           "or open cell-level plots (composition / UMAP / dot plot / QC).")
-
-        self.rnaseq_de_btn = ttk.Button(
-            tools_btn_frame, text="RNA-seq DE (raw counts)",
-            command=self._open_rnaseq_de,
-            style="ToolGreen.TButton")
-        self.rnaseq_de_btn.grid(row=0, column=5, padx=8, pady=6, sticky="ew")
-        self._set_tooltip(self.rnaseq_de_btn,
-                          "Load a raw count matrix (CSV / 10x MTX / h5ad), run QC + DESeq2 "
-                          "differential expression, then GSEA. Register the normalised matrix "
-                          "as a platform to use it in every other window. Needs pip install "
-                          "genevariate[rnaseq].")
 
         # ── Label Source (inside tools_frame - always visible) ──────
         ttk.Separator(tools_frame, orient='horizontal').pack(fill=tk.X, pady=(8, 4))
@@ -12270,8 +12484,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                            foreground=AERO["warn"])
             # Tools stay enabled — each one can quick-load on demand.
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
         elif not has_loaded and has_available:
@@ -12283,8 +12496,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                      f"Use Gene Distribution Explorer for quick gene-only loading",
                 foreground=AERO["warn"])
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
         else:
@@ -12306,8 +12518,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                                            foreground=AERO["green_dark"])
 
             self.gene_explorer_btn.config(state=tk.NORMAL)
-            self.compare_btn.config(state=tk.NORMAL)
-            self.dist_class_btn.config(state=tk.NORMAL)
+            self.dist_analysis_btn.config(state=tk.NORMAL)
             if hasattr(self, 'label_enrich_btn'):
                 self.label_enrich_btn.config(state=tk.NORMAL)
 
@@ -17124,7 +17335,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
     def _plot_histograms_overlay(self, popup, sel_plats):
         """Overlay all selected genes on one plot per platform."""
         genes = popup.current_genes
-        gene_colors = ['#1976D2', '#C62828', '#2E7D32', '#F57C00', '#7B1FA2',
+        gene_colors = ['#1976D2', '#C62828', '#2E7D32', '#17BECF', '#7B1FA2',
                         '#00838F', '#AD1457', '#4E342E', '#37474F', '#827717']
 
         if not hasattr(popup, '_overlay_genes'):
@@ -17267,7 +17478,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         if not overlay:
             return
 
-        chosen_color = '#FF6F00'
+        chosen_color = '#7B1FA2'
         count = 0
 
         for dfg, plat, col, gene, bins, patches in overlay:
@@ -17309,7 +17520,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         popup.compare_btn.config(state=tk.NORMAL if total > 1 else tk.DISABLED)
         popup.selection_label.config(
             text=f"[*] {count} gene(s) x {total} region(s) selected (overlay)",
-            foreground='#FF6F00'
+            foreground='#7B1FA2'
         )
 
     def _plot_single_histogram(self, ax, gene, plat, popup, batch_offset=0):
@@ -17366,7 +17577,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
             expr = expr - batch_offset
         
         if expr.empty:
-            ax.set_title(f"{plat} - {col}\n[!] No data", color='orange', fontsize=10, weight='bold')
+            ax.set_title(f"{plat} - {col}\n[!] No data", color='#C0392B', fontsize=10, weight='bold')
             ax.axis("off")
             return None
         
@@ -18188,7 +18399,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                     'label': f"{gene}_R{len(region_specs)+1}_{plat}",
                     'gene': gene, 'platform': plat, 'column': col,
                     'range': (low, high),
-                    'color': color if isinstance(color, str) else '#FF6F00',
+                    'color': color if isinstance(color, str) else '#7B1FA2',
                     'expression_values': expr_vals,
                     'gsm_list': gsms,
                     'platform_df': platform_slim,
@@ -18502,6 +18713,29 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
         # Delegate to unified pipeline - it auto-detects compare mode when >1 region
         self._analyze_selected_range(popup)
     
+    def _open_distribution_analysis(self):
+        """Unified 'Distribution Analysis' entry point.
+
+        Presents the two distribution tools — Compare Distributions and
+        Distribution Classification — from a single button via a small popup
+        menu next to the button.
+        """
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Compare Distributions",
+                         command=self.open_compare_window)
+        menu.add_command(label="Distribution Classification",
+                         command=self._open_dist_classification)
+        btn = getattr(self, "dist_analysis_btn", None)
+        try:
+            if btn is not None:
+                x = btn.winfo_rootx()
+                y = btn.winfo_rooty() + btn.winfo_height()
+                menu.tk_popup(x, y)
+            else:
+                menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            menu.grab_release()
+
     def open_compare_window(self):
         """Opens Compare Distributions setup dialog — similar to Gene Explorer.
         User picks genes, platforms, batch correction, and label options.
@@ -19258,26 +19492,98 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 parent=self,
             )
 
-    def _open_rnaseq_de(self):
-        """Open the RNA-seq differential-expression window (raw counts).
+    def _open_activity_inference(self):
+        """Open the TF / pathway activity-inference window (decoupleR).
 
-        Loads a raw count matrix (CSV / 10x MTX dir / h5ad), runs QC +
-        DESeq2 median-of-ratios normalisation + negative-binomial DE
-        (pydeseq2) + GSEA, and can register the normalised matrix as a
-        platform in ``self.gpl_datasets``. Import-guarded so the app still
-        launches without the ``rnaseq`` extra installed.
+        Advanced/optional analysis surfaced under Tools rather than the main
+        toolbar. Import-guarded so the app still launches without decoupler.
         """
         try:
-            from genevariate.gui.windows.rnaseq_de import RnaSeqDEWindow
-            RnaSeqDEWindow(self)
+            from genevariate.gui.windows.activity_inference import (
+                ActivityInferenceWindow,
+            )
+            ActivityInferenceWindow(self)
         except Exception as exc:
             import traceback
             traceback.print_exc()
             messagebox.showerror(
-                "RNA-seq DE (raw counts)",
-                f"Could not open the RNA-seq DE window:\n{exc}",
+                "Activity Inference",
+                f"Could not open the Activity Inference window:\n{exc}",
                 parent=self,
             )
+
+    def _build_agent_icon_frames(self, size=26, n=24, bob=3.0, wobble=6.0):
+        """Pre-render the animation frames for the AI-Assistant launcher icon.
+
+        Loads the branded chatbot glyph (``assets/chat-filled-256.png`` — a
+        speech bubble + DNA double-helix + AI sparkle) once and bakes ``n``
+        frames of a gentle sine bob (±``bob`` px) plus a slight rotation
+        wobble (±``wobble``°). Frames are ``PhotoImage``s kept on ``self`` so
+        Tk can't garbage-collect them. Degrades to no image (text-only button)
+        if Pillow or the asset is unavailable — never raises.
+        """
+        import math
+        self._agent_icon_frames = []
+        self._agent_icon_i = 0
+        try:
+            import os
+            from PIL import Image, ImageTk
+            here = os.path.dirname(os.path.abspath(__file__))
+            path = os.path.join(here, "assets", "chat-filled-256.png")
+            base = Image.open(path).convert("RGBA").resize(
+                (size, size), Image.LANCZOS)
+            pad = int(math.ceil(bob)) + 2
+            canvas_h = size + 2 * pad
+            for k in range(n):
+                t = 2 * math.pi * k / n
+                dy = int(round(bob * math.sin(t)))
+                ang = wobble * math.sin(t)
+                rot = base.rotate(ang, resample=Image.BICUBIC, expand=False)
+                frame = Image.new("RGBA", (size, canvas_h), (0, 0, 0, 0))
+                frame.paste(rot, (0, pad + dy), rot)
+                self._agent_icon_frames.append(ImageTk.PhotoImage(frame))
+        except Exception:
+            self._agent_icon_frames = []
+
+    def _place_agent_launcher(self, w):
+        """Pin the frameless AI-Assistant launcher (label + bobbing icon) to
+        the header's right edge; the icon sits just left of the label."""
+        cv = getattr(self, "_agent_header_canvas", None)
+        txt = getattr(self, "_agent_text_item", None)
+        ico = getattr(self, "_agent_icon_item", None)
+        if cv is None or txt is None:
+            return
+        try:
+            cy = int(cv.coords(txt)[1]) if cv.coords(txt) else 20
+            cv.coords(txt, w - 18, cy)          # label right-aligned to the edge
+            if ico is not None:
+                x0 = cv.bbox(txt)[0]            # left x of the label
+                cv.coords(ico, x0 - 8, cy)     # icon abuts the label, right-anchored
+        except Exception:
+            pass
+
+    def _start_agent_icon_anim(self):
+        """Cycle the AI-Assistant icon frames on a repeating ``after`` timer."""
+        frames = getattr(self, "_agent_icon_frames", None)
+        cv = getattr(self, "_agent_header_canvas", None)
+        ico = getattr(self, "_agent_icon_item", None)
+        if not frames or cv is None or ico is None:
+            return
+
+        def _tick():
+            c = getattr(self, "_agent_header_canvas", None)
+            it = getattr(self, "_agent_icon_item", None)
+            fr = getattr(self, "_agent_icon_frames", None)
+            if not fr or c is None or it is None or not c.winfo_exists():
+                return
+            self._agent_icon_i = (self._agent_icon_i + 1) % len(fr)
+            try:
+                c.itemconfig(it, image=fr[self._agent_icon_i])
+            except Exception:
+                return
+            self._agent_icon_after = self.after(90, _tick)
+
+        self._agent_icon_after = self.after(90, _tick)
 
     def _toggle_chat_sidebar(self):
         """Show/hide the conversational assistant sidebar (Ctrl+/).
@@ -19524,7 +19830,7 @@ Developed with Python, Tkinter, Matplotlib, and scikit-learn.
                 if len(example_genes) == 1:
                     axes = [axes]
 
-                colors = ['#1565C0', '#C62828', '#2E7D32', '#E65100', '#7B1FA2']
+                colors = ['#1565C0', '#C62828', '#2E7D32', '#00838F', '#7B1FA2']
                 for idx, (gene_row, ax_i) in enumerate(zip(example_genes, axes)):
                     gene_name = gene_row['Gene']
                     gene_col = gene_mapping.get(gene_name, gene_name)

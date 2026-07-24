@@ -257,7 +257,7 @@ class CensusClient:
         is_primary_data: Optional[bool] = True,
         extra: Optional[Dict[str, Any]] = None,
         genes: Optional[Sequence[str]] = None,
-        max_cells: Optional[int] = 50_000,
+        max_cells: Optional[int] = None,
         random_seed: int = 0,
         progress_callback=None,
     ):
@@ -278,9 +278,11 @@ class CensusClient:
             Optional gene subset (HGNC symbols or Ensembl IDs); if omitted,
             returns all genes in the organism.
         max_cells
-            Upper cap on the number of cells materialized. If the filter
-            matches more, a random subsample is drawn. Pass ``None`` to
-            disable the cap (beware memory).
+            Optional upper cap on the number of cells materialized. Defaults
+            to ``None`` — every matching cell is fetched so results are not
+            silently subsampled. Set an integer only to cap for memory, in
+            which case a random subsample is drawn when the filter matches
+            more.
         random_seed
             Seed for the subsample. Fixed for reproducibility.
         progress_callback

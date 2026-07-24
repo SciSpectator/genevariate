@@ -27,7 +27,7 @@ import pandas as pd
 # Packages whose versions materially affect analysis output.
 _TRACKED_PACKAGES: tuple[str, ...] = (
     "genevariate", "numpy", "pandas", "scipy", "scikit-learn",
-    "gseapy", "pydeseq2", "anndata", "diptest", "decoupler",
+    "gseapy", "anndata", "diptest", "decoupler",
     "harmonypy", "combat", "statsmodels",
 )
 

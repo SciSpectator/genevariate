@@ -25,17 +25,18 @@ class FakeApp:
 def test_default_model_follows_backend(monkeypatch):
     monkeypatch.delenv("GENEVARIATE_AGENT_BACKEND", raising=False)
     monkeypatch.delenv("GENEVARIATE_AGENT_MODEL", raising=False)
-    # default backend is Groq
+    # default backend is local ollama on gemma4 (no API key)
     assert la._default_model() == la.DEFAULT_AGENT_MODEL
-    assert "llama-3.3-70b" in la.DEFAULT_AGENT_MODEL
+    assert la.DEFAULT_BACKEND == "ollama"
+    assert la.DEFAULT_AGENT_MODEL == "gemma4:e2b"
     # switching backend switches the default model
-    monkeypatch.setenv("GENEVARIATE_AGENT_BACKEND", "ollama")
-    assert la._default_model() == "qwen2.5:7b"
+    monkeypatch.setenv("GENEVARIATE_AGENT_BACKEND", "groq")
+    assert "llama-3.3-70b" in la._default_model()
     # explicit model override wins; blank falls back
     monkeypatch.setenv("GENEVARIATE_AGENT_MODEL", "qwen2.5:14b")
     assert la._default_model() == "qwen2.5:14b"
     monkeypatch.setenv("GENEVARIATE_AGENT_MODEL", "  ")
-    assert la._default_model() == "qwen2.5:7b"
+    assert "llama-3.3-70b" in la._default_model()
 
 
 def test_resolve_ollama_model_appends_quant(monkeypatch):

@@ -53,9 +53,9 @@ def test_manifest_params_are_jsonable():
 
 
 def test_manifest_markdown_renders():
-    man = build_manifest("run_ngs_de", params={"min_count": 10},
-                         inputs={"counts": _df(0)}, seed=7)
+    man = build_manifest("condition_enrichment", params={"min_count": 10},
+                         inputs={"expr": _df(0)}, seed=7)
     md = manifest_to_markdown(man)
     assert "Reproducibility" in md
-    assert "run_ngs_de" in md
+    assert "condition_enrichment" in md
     assert "seed" in md and "7" in md

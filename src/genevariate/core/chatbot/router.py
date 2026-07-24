@@ -115,6 +115,11 @@ def _tokens(text: str) -> set:
 
 
 def _keyword_route(prompt: str, registry: Dict[str, Tool]) -> Action:
+    forced = _strong_intent(prompt, registry)
+    if forced is not None:
+        params = _extract_keyword_params(prompt, registry[forced])
+        return Action(tool=forced, params=params, confidence=0.75,
+                      source="keyword")
     ptok = _tokens(prompt)
     best_name, best_score = None, 0.0
     for t in registry.values():
@@ -156,6 +161,56 @@ def _extract_gene(prompt: str) -> Optional[str]:
     return None
 
 
+# High-precision deterministic overrides for a few request shapes the
+# bag-of-words scorer routes wrong. Each rule fires only on strong, unambiguous
+# signals so it never regresses the prompts the scorer already gets right.
+_LOAD_VERBS = {"load", "download", "fetch", "get", "open", "import", "pull"}
+_DIST_WORDS = {"distribution", "distributions", "bimodal", "multimodal",
+               "unimodal", "histogram", "shape", "shapes", "skewed", "skew"}
+_COMPARE_WORDS = {"compare", "side", "versus", "vs", "differ", "differs",
+                  "across", "between"}
+_MODALITY_HINT = ("modalit", "harmoni", "microarray", "rna-seq", "rnaseq",
+                  "single-cell", "single cell", "scrna", "z-score", "zscore",
+                  "batch")
+_SC_HINT = ("single cell", "single-cell", "scrna", "sc-rna")
+
+
+def _strong_intent(prompt: str, registry: Dict[str, Tool]) -> Optional[str]:
+    low = prompt.lower()
+    tok = _tokens(prompt)
+    plats = {p.upper() for p in _PLATFORM.findall(prompt)}
+    gene = _extract_gene(prompt)
+    has_mod = any(h in low for h in _MODALITY_HINT)
+    has_sc = any(h in low for h in _SC_HINT)
+
+    # 1) a load/download verb + a named GPL id (and not single-cell) -> load it
+    if plats and (tok & _LOAD_VERBS) and not has_sc \
+            and "load_geo_platform" in registry:
+        return "load_geo_platform"
+    # 2) variability + enrichment mentioned together -> variability enrichment
+    #    (the scorer otherwise leaks these to rank_genes)
+    if "variab" in low and "enrich" in low \
+            and "variability_enrichment" in registry:
+        return "variability_enrichment"
+    # 3) one gene + a distribution-shape word, no comparison/modality cue and at
+    #    most one platform -> profile that single gene
+    if gene and (tok & _DIST_WORDS) and not (tok & _COMPARE_WORDS) \
+            and not has_mod and len(plats) < 2 \
+            and "gene_distribution" in registry:
+        return "gene_distribution"
+    # 4) a distribution-shape word with NO specific gene named -> classify the
+    #    whole platform's distributions rather than one gene
+    if gene is None and (tok & _DIST_WORDS) and plats \
+            and "classify_distributions" in registry:
+        return "classify_distributions"
+    # 3) one gene compared side-by-side across >=2 named GPL platforms with no
+    #    modality/harmonisation cue -> plain compare (not compare_modalities)
+    if gene and len(plats) >= 2 and (tok & _COMPARE_WORDS) and not has_mod \
+            and "compare_gene" in registry:
+        return "compare_gene"
+    return None
+
+
 def _extract_keyword_params(prompt: str, tool: Tool) -> Dict[str, Any]:
     params: Dict[str, Any] = {}
     names = {p.name for p in tool.params}
@@ -175,11 +230,6 @@ def _extract_keyword_params(prompt: str, tool: Tool) -> Dict[str, Any]:
             params["platforms"] = list(dict.fromkeys(plats))
         elif "platform" in names:
             params["platform"] = plats[0]
-    # a bare path for the NGS tool
-    if "counts_path" in names:
-        pm = re.search(r"(\S+\.(?:csv|tsv|h5ad|txt|gz))", prompt, re.IGNORECASE)
-        if pm:
-            params["counts_path"] = pm.group(1)
     return tool.coerce(params)
 
 

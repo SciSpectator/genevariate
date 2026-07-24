@@ -48,6 +48,7 @@ class ToolResult:
     ok: bool = True
     report: str = ""           # optional markdown description/analysis
     manifest: Dict[str, Any] = field(default_factory=dict)  # reproducibility record
+    figure: Any = None         # optional matplotlib Figure (Agg) for the results window
 
 
 @dataclass

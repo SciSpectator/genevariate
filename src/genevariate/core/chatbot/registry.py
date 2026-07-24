@@ -8,6 +8,7 @@ run on a worker thread and return a :class:`ToolResult`.
 """
 from __future__ import annotations
 
+import os
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -242,11 +243,15 @@ def build_registry(app) -> Dict[str, Tool]:
         except Exception:
             report = ""
         report = _append_manifest(report, manifest)
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(ranked, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Condition enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, report=report, manifest=manifest,
-            payload={"ranked": ranked, "gsea": gsea, "report": report})
+            table=top, report=report, manifest=manifest, figure=fig,
+            payload={"ranked": ranked, "gsea": gsea, "chart": cdesc,
+                     "report": report})
 
     # ---- variability_enrichment ---------------------------------
     def _var_exec(app, resolved, progress_cb):
@@ -274,11 +279,15 @@ def build_registry(app) -> Dict[str, Tool]:
                 ranked, gsea, comparison, method or VARIABILITY_DEFAULT_METHOD)
         except Exception:
             report = ""
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(ranked, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Variability enrichment ({case} vs {control}) on "
             f"{resolved.get('platform')}: {n} enriched term(s).",
-            table=top, report=report,
-            payload={"ranked": ranked, "gsea": gsea, "report": report})
+            table=top, report=report, figure=fig,
+            payload={"ranked": ranked, "gsea": gsea, "chart": cdesc,
+                     "report": report})
 
     # ---- rank_genes (no GSEA) -----------------------------------
     def _rank_exec(app, resolved, progress_cb):
@@ -288,92 +297,14 @@ def build_registry(app) -> Dict[str, Tool]:
         progress_cb(40.0, "Ranking genes…")
         ranked = rank_genes_by_condition(df, labels, case, control,
                                          moderated=bool(resolved.get("moderated", False)))
+        from . import charts
+        title = f"Top genes — {case} vs {control}"
+        fig, cdesc = charts.fig_from_enrichment(ranked, None, title)
+        report = charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Top-ranked genes ({case} vs {control}) on {resolved.get('platform')}.",
-            table=ranked.head(25), payload={"ranked": ranked})
-
-    # ---- run_ngs_de (raw counts -> DESeq2 -> GSEA) --------------
-    def _ngs_resolver(app, raw):
-        out = dict(raw)
-        out.setdefault("libraries", libs_default)
-        out.setdefault("min_count", 10)
-        return out
-
-    def _ngs_exec(app, resolved, progress_cb):
-        import os
-        from genevariate.core.count_io import load_counts
-        from genevariate.core.analysis import (
-            run_deseq2, deseq_results_to_ranked,
-        )
-        path = resolved.get("counts_path")
-        if not path:
-            return ToolResult("counts_path is required (CSV, 10x dir, or h5ad).",
-                              ok=False)
-        if not os.path.exists(path):
-            return ToolResult(f"Count file not found: {path!r}. Provide a valid "
-                              "CSV/TSV, 10x directory, or .h5ad path.", ok=False)
-        column = resolved.get("condition_column")
-        case = resolved.get("case_label")
-        control = resolved.get("control_label")
-        if not (column and case and control):
-            return ToolResult(
-                "condition_column, case_label and control_label are required "
-                "for DESeq2.", ok=False)
-        progress_cb(15.0, "Loading counts…")
-        try:
-            counts, meta = load_counts(path)
-        except Exception as exc:
-            return ToolResult(f"Could not read counts from {path!r}: {exc}",
-                              ok=False)
-        if meta is None or column not in meta.columns:
-            return ToolResult(
-                f"Sample metadata has no column {column!r}; DESeq2 needs a "
-                "design factor from the count file's metadata.", ok=False)
-        progress_cb(45.0, "Running DESeq2…")
-        res = run_deseq2(counts, meta, (column, str(case), str(control)),
-                         min_count=int(resolved.get("min_count", 10)))
-        progress_cb(75.0, "Ranking + GSEA…")
-        ranked = deseq_results_to_ranked(res)
-        libs = [s.strip() for s in str(resolved.get("libraries", libs_default)).split(",")
-                if s.strip()]
-        gsea = run_prerank_gsea(ranked, gene_sets=libs)
-        n = _gsea_term_count(gsea)
-
-        # Optionally publish log-CPM-normalised counts as a platform so the NGS
-        # result becomes a modality you can compare / connect against the others.
-        registered = None
-        register_as = str(resolved.get("register_as") or "").strip()
-        if register_as:
-            from genevariate.core.analysis import (
-                cpm_normalize, counts_to_platform_df,
-            )
-            progress_cb(90.0, f"Registering {register_as} as a platform…")
-            norm = cpm_normalize(counts, log=True)
-            meta2 = meta.copy()
-            if column in meta2.columns:
-                meta2 = meta2.rename(columns={column: f"Classified_{column}"})
-            plat_df = counts_to_platform_df(norm, sample_meta=meta2)
-            key = (register_as if register_as not in _platforms(app)
-                   else f"{register_as}_{len(_platforms(app))}")
-            app.gpl_datasets[key] = plat_df
-            registered = key
-            try:
-                app.after(0, app._update_platform_status)
-            except Exception:
-                pass
-
-        extra = f" Registered normalised counts as platform {registered!r}." \
-            if registered else ""
-        manifest = _manifest("run_ngs_de", resolved,
-                             inputs={"counts": path}, seed=42)
-        report = _append_manifest("", manifest)
-        return ToolResult(
-            f"DESeq2 DE + GSEA ({case} vs {control}): {len(res)} genes tested, "
-            f"{n} enriched term(s).{extra}",
-            table=(gsea.head(15) if n else ranked.head(15)),
-            report=report, manifest=manifest,
-            payload={"deseq": res, "ranked": ranked, "gsea": gsea,
-                     "registered": registered})
+            table=ranked.head(25), report=report, figure=fig,
+            payload={"ranked": ranked, "chart": cdesc})
 
     # ---- classify_distributions (modality landscape) ------------
     def _modality_resolver(app, raw):
@@ -499,12 +430,15 @@ def build_registry(app) -> Dict[str, Tool]:
         report = _append_manifest(report, manifest)
         n = _gsea_term_count(gsea)
         top = gsea.head(15) if n else combined.head(15)
+        from . import charts
+        fig, cdesc = charts.fig_from_enrichment(combined, gsea, comparison)
+        report += charts.describe_bar_block(cdesc)
         return ToolResult(
             f"Cross-platform meta-enrichment ({method}) over {len(used)} "
             f"platform(s): {n} consensus term(s).",
-            table=top, report=report, manifest=manifest,
+            table=top, report=report, manifest=manifest, figure=fig,
             payload={"combined": combined, "gsea": gsea,
-                     "platforms": used, "report": report})
+                     "platforms": used, "chart": cdesc, "report": report})
 
     tools: Dict[str, Tool] = {}
 
@@ -555,30 +489,6 @@ def build_registry(app) -> Dict[str, Tool]:
         resolver=_cond_resolver, executor=_rank_exec,
         examples=("rank genes tumor vs normal", "top differential genes",
                   "which genes change case vs control"))
-
-    tools["run_ngs_de"] = Tool(
-        name="run_ngs_de",
-        description="DESeq2 differential expression on a raw-count file, then GSEA.",
-        params=[
-            ToolParam("counts_path", "str",
-                      help="Path to counts CSV/TSV, 10x dir, or .h5ad."),
-            ToolParam("condition_column", "str",
-                      help="Design factor column in the count metadata."),
-            ToolParam("case_label", "str", help="Test level."),
-            ToolParam("control_label", "str", help="Reference level."),
-            ToolParam("libraries", "str", required=False, default=libs_default,
-                      help="Comma-separated gene-set libraries."),
-            ToolParam("min_count", "int", required=False, default=10,
-                      help="Drop genes with total count below this."),
-            ToolParam("register_as", "str", required=False,
-                      help="If set, publish log-CPM counts under this platform "
-                           "name so the NGS result can be compared/connected "
-                           "against other modalities."),
-        ],
-        resolver=_ngs_resolver, executor=_ngs_exec,
-        examples=("run deseq2 on counts.csv treated vs control",
-                  "ngs differential expression from h5ad",
-                  "raw count rna-seq de"))
 
     tools["classify_distributions"] = Tool(
         name="classify_distributions",
@@ -657,10 +567,14 @@ def build_registry(app) -> Dict[str, Tool]:
                   f"({cv:.2f})\n"
                   f"- **Range**: {stats.get('min', float('nan')):.3g} – "
                   f"{stats.get('max', float('nan')):.3g}\n")
-        return ToolResult(summ, table=tbl, report=report,
+        from . import charts
+        fig, desc = charts.fig_histogram(vec, gene, label=key,
+                                         dist_class=stats.get("distribution", ""))
+        report += charts.describe_distribution_block(desc)
+        return ToolResult(summ, table=tbl, report=report, figure=fig,
                           payload={"gene": gene, "platform": key,
                                    "values": vec, "stats": stats,
-                                   "report": report})
+                                   "chart": desc, "report": report})
 
     tools["gene_distribution"] = Tool(
         name="gene_distribution",
@@ -684,7 +598,12 @@ def build_registry(app) -> Dict[str, Tool]:
             plats_arg = [s.strip() for s in plats_arg.replace(";", ",").split(",")
                          if s.strip()]
         if plats_arg:
-            resolved = [_match_platform(app, p) for p in plats_arg]
+            resolved = []
+            for p in plats_arg:
+                m = _match_platform(app, p)
+                # Keep an unmatched GPL id verbatim so the executor can
+                # auto-load/download it (full automation).
+                resolved.append(m if m else str(p).strip().upper())
             out["platforms"] = [p for p in dict.fromkeys(resolved) if p]
         else:
             out["platforms"] = list(_platforms(app).keys())
@@ -699,6 +618,13 @@ def build_registry(app) -> Dict[str, Tool]:
         if len(keys) < 2:
             return ToolResult("Need at least two platforms/sources to compare. "
                               "Load or fetch them first.", ok=False)
+        # Auto-load (and download when missing) any GPL platform not yet in
+        # memory so the comparison is fully automated.
+        for key in list(keys):
+            if key not in _platforms(app) and str(key).upper().startswith("GPL"):
+                progress_cb(8.0, f"Loading {key}…")
+                _load_exec(app, {"platform": key, "download": True, "max_gse": 0},
+                           progress_cb)
         plats = _platforms(app)
         rows, vecs = [], {}
         for i, key in enumerate(keys):
@@ -737,9 +663,13 @@ def build_registry(app) -> Dict[str, Tool]:
         if ks_txt:
             rlines.append("\n**Two-sample test:**" + ks_txt)
         report = "\n".join(rlines)
-        return ToolResult(summ, table=table, report=report,
+        from . import charts
+        fig, desc = charts.fig_overlay(vecs, gene)
+        report += charts.describe_overlay_block(desc)
+        return ToolResult(summ, table=table, report=report, figure=fig,
                           payload={"gene": gene, "sources": usable,
-                                   "vectors": vecs, "report": report})
+                                   "vectors": vecs, "chart": desc,
+                                   "report": report})
 
     tools["compare_gene"] = Tool(
         name="compare_gene",
@@ -784,19 +714,27 @@ def build_registry(app) -> Dict[str, Tool]:
         n_found = int(tbl["n"].fillna(0).gt(0).sum()) if "n" in tbl.columns else 0
         if n_found == 0:
             return ToolResult(f"{gene!r} was not found in any source.", ok=False)
+        from . import charts
+        harm = {k: v for k, v in (res.get("harmonized") or {}).items()
+                if v is not None and getattr(v, "size", 0) > 1}
+        fig, desc = charts.fig_overlay(harm, gene)
+        report = res["report"] + charts.describe_overlay_block(desc)
         return ToolResult(res["summary"], table=res["table"],
-                          report=res["report"],
+                          report=report, figure=fig,
                           payload={"gene": gene, "pairwise": res["pairwise"],
                                    "harmonized": res["harmonized"],
                                    "concordant": res["concordant"],
-                                   "report": res["report"]})
+                                   "chart": desc, "report": report})
 
     tools["compare_modalities"] = Tool(
         name="compare_modalities",
-        description="Compare the SAME gene across different data modalities "
-                    "(microarray / RNA-seq / single-cell) on a harmonised scale "
+        description="Compare the SAME gene across different data MODALITIES "
+                    "(microarray / RNA-seq / single-cell) on a HARMONISED scale "
                     "(z-score or rank), then test whether its distribution shape "
-                    "is consistent across modalities.",
+                    "is consistent across modalities. ALWAYS pick this tool when "
+                    "the request says 'modalities', 'harmonise/harmonize', "
+                    "'z-score', 'rank scale', or 'batch correction' — even if it "
+                    "also names specific platforms like GPL570/GPL96.",
         params=[
             ToolParam("gene", "str", help="Gene symbol to compare."),
             ToolParam("platforms", "list", required=False,
@@ -907,7 +845,78 @@ def build_registry(app) -> Dict[str, Tool]:
 
     # ---- load_geo_platform (headless, no dialogs) ---------------
     def _load_resolver(app, raw):
-        return dict(raw)
+        out = dict(raw)
+        out.setdefault("download", True)
+        out.setdefault("max_gse", 0)
+        return out
+
+    def _download_platform(app, key_up, resolved, progress_cb):
+        """Auto-download a GPL from GEO when it isn't on disk.
+
+        Returns the saved CSV path (str) on success, or a failing
+        ``ToolResult`` describing why the download could not proceed.
+        """
+        gds_conn = getattr(app, "gds_conn", None)
+        data_dir = getattr(app, "data_dir", None)
+        if gds_conn is None or not data_dir:
+            return ToolResult(
+                f"No local file for {key_up} and no GEO metadata database is "
+                "open to download it. Open GEOmetadb (or add the CSV to the "
+                "data directory) and try again.", ok=False)
+        try:
+            from genevariate.core.gpl_downloader import GPLDownloader
+        except Exception as exc:
+            return ToolResult(f"GPL downloader unavailable: {exc}", ok=False)
+        try:
+            downloader = GPLDownloader(gds_conn=gds_conn, output_base_dir=data_dir)
+            downloader.check_dependencies()
+        except Exception as exc:
+            return ToolResult(
+                f"Cannot auto-download {key_up} (missing dependency): {exc}. "
+                "Install GEOparse or place the CSV in the data directory.",
+                ok=False)
+        try:
+            max_gse = int(resolved.get("max_gse") or 0)
+        except Exception:
+            max_gse = 0
+        if max_gse < 0:
+            max_gse = 0  # 0 == fetch every GSE series (whole platform)
+
+        info = None
+        query = getattr(app, "_query_gpl_info_local", None)
+        try:
+            if callable(query):
+                info = query(key_up)
+        except Exception as exc:
+            return ToolResult(
+                f"{key_up} was not found in the GEO metadata database: {exc}",
+                ok=False)
+
+        scope = f"up to {max_gse} series" if max_gse else "all series"
+        progress_cb(20.0,
+                    f"Downloading {key_up} from GEO ({scope})…")
+
+        def cb(pct, stage, msg):
+            try:
+                if pct is not None:
+                    progress_cb(20.0 + float(pct) * 0.55, f"{key_up}: {msg}")
+            except Exception:
+                pass
+
+        try:
+            if info is not None:
+                res = downloader.run_with_info(info, max_gse=max_gse, callback=cb)
+            else:
+                res = downloader.run(key_up, max_gse=max_gse, callback=cb)
+        except Exception as exc:
+            return ToolResult(
+                f"Auto-download of {key_up} failed: {exc}", ok=False)
+
+        fpath = res.get("filepath") if isinstance(res, dict) else None
+        if not fpath or not os.path.exists(fpath):
+            return ToolResult(
+                f"Auto-download of {key_up} produced no usable file.", ok=False)
+        return fpath
 
     def _load_exec(app, resolved, progress_cb):
         name = str(resolved.get("platform") or "").strip()
@@ -918,17 +927,26 @@ def build_registry(app) -> Dict[str, Tool]:
             df = _platforms(app)[key_up]
             return ToolResult(f"{key_up} already loaded ({df.shape[0]} samples).",
                               payload={"platform": key_up})
-        progress_cb(20.0, f"Locating {key_up}…")
+        progress_cb(15.0, f"Locating {key_up}…")
         try:
             available = app._discover_available_platforms()
         except Exception:
             available = {}
         path = available.get(key_up) or available.get(name)
+
+        # Not on disk → download it straight from GEO (full automation).
+        if not path and bool(resolved.get("download", True)):
+            dl = _download_platform(app, key_up, resolved, progress_cb)
+            if isinstance(dl, ToolResult):
+                return dl  # surface the download failure
+            path = dl
+
         if not path:
             return ToolResult(
-                f"No local file found for {key_up}. Download it via the GPL "
-                "downloader, or place its CSV in the data directory.", ok=False)
-        progress_cb(50.0, f"Reading {key_up}…")
+                f"No local file found for {key_up} and auto-download is off. "
+                "Enable download, or place its CSV in the data directory.",
+                ok=False)
+        progress_cb(80.0, f"Reading {key_up}…")
         comp = "gzip" if str(path).endswith(".gz") else "infer"
         df = pd.read_csv(path, compression=comp, low_memory=False)
         # canonicalise: ensure a GSM column
@@ -951,9 +969,17 @@ def build_registry(app) -> Dict[str, Tool]:
 
     tools["load_geo_platform"] = Tool(
         name="load_geo_platform",
-        description="Load a locally-available GEO/GPL microarray platform "
-                    "into memory so it can be analysed.",
-        params=[ToolParam("platform", "str", help="Platform id, e.g. GPL570.")],
+        description="Load a GEO/GPL microarray platform into memory so it can be "
+                    "analysed. If the platform isn't already on disk the whole "
+                    "platform is downloaded automatically from GEO (every GSE "
+                    "series). Set max_gse only to cap the number of series.",
+        params=[
+            ToolParam("platform", "str", help="Platform id, e.g. GPL570."),
+            ToolParam("download", "bool", required=False, default=True,
+                      help="Auto-download from GEO when not found locally."),
+            ToolParam("max_gse", "int", required=False, default=0,
+                      help="Max GEO series to fetch; 0 = the whole platform."),
+        ],
         resolver=_load_resolver, executor=_load_exec,
         examples=("load GPL570", "load the GEO platform GPL96",
                   "bring in microarray platform GPL10558"))
@@ -962,7 +988,7 @@ def build_registry(app) -> Dict[str, Tool]:
     def _sc_resolver(app, raw):
         out = dict(raw)
         out.setdefault("organism", "homo_sapiens")
-        out.setdefault("max_cells", 20000)
+        out.setdefault("max_cells", 0)  # 0 == all matching cells (no subsample)
         out.setdefault("name", "scRNA")
         return out
 
@@ -980,9 +1006,11 @@ def build_registry(app) -> Dict[str, Tool]:
         tissue = resolved.get("tissue") or None
         organism = resolved.get("organism", "homo_sapiens")
         try:
-            max_cells = int(resolved.get("max_cells", 20000))
+            max_cells = int(resolved.get("max_cells") or 0)
         except (TypeError, ValueError):
-            max_cells = 20000
+            max_cells = 0
+        # 0/None → fetch every matching cell so the pseudobulk is unbiased.
+        max_cells = max_cells if max_cells > 0 else None
         progress_cb(15.0, "Querying CELLxGENE Census…")
         client = CensusClient()
         try:
@@ -1142,8 +1170,8 @@ def build_registry(app) -> Dict[str, Tool]:
                       help="Tissue filter, e.g. lung."),
             ToolParam("organism", "str", required=False, default="homo_sapiens",
                       help="Census organism."),
-            ToolParam("max_cells", "int", required=False, default=20000,
-                      help="Cap on cells fetched."),
+            ToolParam("max_cells", "int", required=False, default=0,
+                      help="Optional cap on cells fetched; 0 = all matching cells."),
             ToolParam("name", "str", required=False, default="scRNA",
                       help="Platform name to register under."),
         ],
@@ -1151,5 +1179,85 @@ def build_registry(app) -> Dict[str, Tool]:
         examples=("fetch single cell data for TP53 in lung",
                   "get scRNA-seq from cellxgene for brain",
                   "pull single-cell data for EGFR"))
+
+    # ---- save_learned_tool (promote a snippet into a persisted named tool) --
+    def _save_tool_resolver(app, raw):
+        out = dict(raw)
+        params = raw.get("params")
+        if isinstance(params, str):
+            try:
+                import json as _json
+                params = _json.loads(params) if params.strip() else []
+            except Exception:
+                params = []
+        out["params"] = params if isinstance(params, list) else []
+        ex = raw.get("examples")
+        if isinstance(ex, str):
+            ex = [e.strip() for e in ex.replace(";", ",").split(",") if e.strip()]
+        out["examples"] = ex if isinstance(ex, list) else []
+        return out
+
+    def _save_tool_exec(app, resolved, progress_cb):
+        from .learned import save_learned_tool_record
+        from .code_exec import CodeValidationError
+        name = str(resolved.get("name") or "").strip()
+        code = str(resolved.get("code") or "").strip()
+        if not name or not code:
+            return ToolResult("Provide both a `name` and a `code` snippet (which "
+                              "must assign its answer to `result`).", ok=False)
+        progress_cb(40.0, f"Validating and saving learned tool '{name}'…")
+        try:
+            path = save_learned_tool_record(
+                app, name=name,
+                description=str(resolved.get("description") or ""),
+                code=code, params=resolved.get("params"),
+                examples=resolved.get("examples"))
+        except CodeValidationError as exc:
+            return ToolResult(f"Refused to save unsafe/invalid tool: {exc}",
+                              ok=False)
+        except Exception as exc:
+            return ToolResult(f"Could not save learned tool: {exc}", ok=False)
+        return ToolResult(
+            f"Learned tool '{name}' saved — it is now available on the next "
+            "request (and future sessions).",
+            report=f"# Learned tool saved: `{name}`\n\n```python\n{code}\n```",
+            payload={"path": path, "_registry_dirty": True})
+
+    tools["save_learned_tool"] = Tool(
+        name="save_learned_tool",
+        description="Promote a working sandboxed snippet into a NEW, persisted "
+                    "named tool so it can be reused later without rewriting the "
+                    "code. Use this after `run_analysis_code` succeeds on a task "
+                    "the user is likely to repeat. The snippet reads its typed "
+                    "inputs from a `params` dict, uses `platforms`, and assigns "
+                    "its answer to `result`; it runs in the same blocked sandbox "
+                    "(no imports / files / network). Same-named tool overwrites.",
+        params=[
+            ToolParam("name", "str",
+                      help="Short snake_case name for the new tool."),
+            ToolParam("description", "str", required=False, default="",
+                      help="What the tool does (shown to the agent)."),
+            ToolParam("code", "str",
+                      help="Sandboxed snippet; read `params`/`platforms`, set "
+                           "`result`."),
+            ToolParam("params", "list", required=False, default=[],
+                      help="JSON list of param specs "
+                           "[{name,type,required,default,help}]."),
+            ToolParam("examples", "list", required=False, default=[],
+                      help="Example phrasings that should trigger this tool."),
+        ],
+        resolver=_save_tool_resolver, executor=_save_tool_exec,
+        examples=("save this as a reusable tool called gene_zscore",
+                  "remember this analysis as a new tool",
+                  "turn that snippet into a named tool"))
+
+    # ---- merge in any previously-learned (persisted) tools ------------------
+    try:
+        from .learned import build_learned_tools
+        for lname, ltool in build_learned_tools(app).items():
+            if lname not in tools:  # never shadow a built-in
+                tools[lname] = ltool
+    except Exception:
+        pass
 
     return tools

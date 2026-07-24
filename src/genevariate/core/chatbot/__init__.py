@@ -6,6 +6,12 @@ Executors call the existing ``genevariate.core.analysis`` API.
 """
 from .tools import Tool, ToolParam, ToolResult, Action
 from .registry import build_registry
+from .learned import (
+    build_learned_tools,
+    save_learned_tool_record,
+    load_learned_records,
+    delete_learned_tool,
+)
 from .router import route
 from .agent import plan, run_plan, Plan, Step, AgentRun
 from .langchain_agent import (
@@ -25,6 +31,10 @@ __all__ = [
     "ToolResult",
     "Action",
     "build_registry",
+    "build_learned_tools",
+    "save_learned_tool_record",
+    "load_learned_records",
+    "delete_learned_tool",
     "route",
     "plan",
     "run_plan",

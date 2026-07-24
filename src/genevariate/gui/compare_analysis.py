@@ -557,7 +557,7 @@ class CompareDistributionsWindow(tk.Toplevel):
             fig_h = max(6, 2.5 + n * 0.5)
             fig, ax = plt.subplots(figsize=(max(10, 2.5 + n * 0.5), fig_h))
             sns.heatmap(pd.DataFrame(mat, index=tl, columns=tl),
-                        annot=True, fmt=".3f", cmap="YlOrRd", ax=ax,
+                        annot=True, fmt=".3f", cmap="Blues", ax=ax,
                         linewidths=0.5, linecolor='white')
             ax.set_title(f"Pairwise Distance - {mname}", fontsize=13, weight='bold')
             ax.tick_params(labelsize=9)

@@ -8,16 +8,22 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.1.0-blueviolet?style=for-the-badge" alt="v2.1.0">
+  <img src="https://img.shields.io/badge/GeneVariate-gene%20expression%20analysis-1565C0?style=for-the-badge" alt="GeneVariate">
 </p>
 
 <p align="center">
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Backend-Ollama-orange.svg?logo=ollama&logoColor=white" alt="Ollama">
+  <img src="https://img.shields.io/badge/Backend-Ollama-0097A7.svg?logo=ollama&logoColor=white" alt="Ollama">
   <img src="https://img.shields.io/badge/Data-Microarray%20%7C%20RNA--seq%20%7C%20Methylation-1565C0" alt="Technologies">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/Docker-Supported-2496ED?logo=docker&logoColor=white" alt="Docker">
+</p>
+
+<p align="center">
+  <img src="docs/images/main_window.png" alt="GeneVariate main window — load platforms, analysis tools, and the guided workflow" width="90%">
+  <br>
+  <sub>The GeneVariate desktop app: load microarray / RNA-seq / single-cell platforms, run analyses, and open the AI Assistant (top-right).</sub>
 </p>
 
 ---
@@ -25,14 +31,16 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [Features](#features)
-4. [Architecture](#architecture)
-5. [Usage](#usage)
-6. [Novel Analysis Methods](#novel-analysis-methods)
-7. [Development](#development)
-8. [Citation](#citation)
-9. [License](#license)
+2. [What Can You Do?](#what-can-you-do)
+3. [Quick Start](#quick-start)
+4. [The AI Assistant](#the-ai-assistant)
+5. [Features](#features)
+6. [Architecture](#architecture)
+7. [Usage & Workflow](#usage--workflow)
+8. [Novel Analysis Methods](#novel-analysis-methods)
+9. [Development](#development)
+10. [Citation](#citation)
+11. [License](#license)
 
 ---
 
@@ -51,6 +59,53 @@ automatically by a local LLM (`gemma4:e2b` via [Ollama](https://ollama.com/)), f
 with multi-value and coded-value support.
 
 **All inference runs on your hardware.** No API keys, no cloud, no data exfiltration.
+
+---
+
+## What Can You Do?
+
+GeneVariate is both a **desktop app** (`genevariate`) and a **scriptable Python library**
+(`from genevariate.core.analysis import …`). Everything below is available from the GUI, and
+most of it is also exposed to the [AI Assistant](#the-ai-assistant) as a natural-language tool.
+
+### 1 · Bring in data from any technology
+
+| Do this | Where | Result |
+|---|---|---|
+| **Load a microarray platform** (GPL570, GPL96, any GPL) | *Human Platforms* buttons / **Download Platform** | Whole platform pulled from GEO, probe→gene mapped, quantile-normalised |
+| **Load bulk RNA-seq** | Tools → **Load RNA-seq from ARCHS4…** | Uniformly-reprocessed GEO/SRA counts, no 30 GB local download |
+| **Fetch single-cell RNA-seq** | **Single-cell (CELLxGENE)** button | Census cells filtered by tissue/disease/cell-type → pseudo-bulked → registered as a platform |
+| **Load your own CSV** | **+ Add Custom Platform** / **Load External CSV** (Ctrl+O) | Your matrix ingested into the canonical `GSM | series_id | GENE…` format |
+
+Every source lands in one canonical format, so every downstream tool consumes them identically.
+
+### 2 · Label your samples
+
+| Do this | Where | Result |
+|---|---|---|
+| **Auto-label with a local LLM** | **LLM Extraction** (Sample Labels → *LLM (Ollama)*) | Tissue / condition / treatment extracted per sample by `gemma4:e2b`, fully offline |
+| **Use pre-computed labels** | Sample Labels → *Label Files (per-platform)* | Attach your own per-platform label CSVs |
+| **Label by hand** | **Manual Labeling** | Interactive per-sample tagging |
+| **Merge/curate labels** | Tools → **Curate Labels (LLM)** | An LLM judge reconciles labels across experiments |
+
+### 3 · Explore & analyse
+
+| Do this | Where |
+|---|---|
+| **Profile one gene's distribution** (modality, mean/CV, drag-select ranges) | **Gene Distribution Explorer** |
+| **Compare distributions** across platforms/groups (KDE, PCA/UMAP, Wilcoxon, Wasserstein) | **Distribution Analysis** / Tools → **Compare Distributions** |
+| **Classify every gene's modality** (unimodal / bimodal / heavy-tailed) | Tools → **Distribution Classification** |
+| **Test label enrichment** (Fisher / hypergeometric) across genes, ranges, platforms | **Label Enrichment** |
+| **Rank genes case-vs-control across many platforms** + meta-GSEA | Tools → **Cross-Platform Analysis** |
+| **Run enrichment** (condition or ΔVariance ranking → prerank GSEA) | Tools → **Run Enrichment Analysis** |
+| **Discover case/control groups automatically** from label embeddings | Tools → **Discover Pseudo-Cohorts** |
+| **Infer TF / pathway activity** per sample (CollecTRI / PROGENy via decoupleR) | Tools → **Activity Inference** |
+| **Browse single-cell data** (composition, UMAP, dot plots, QC) | **Single-cell (CELLxGENE)** |
+
+### 4 · Or just ask the assistant
+
+Press **Ctrl+/** (or the **AI Assistant** button) and type a goal in plain English — the agent
+loads/fetches the data itself and runs the right tool. See [The AI Assistant](#the-ai-assistant).
 
 ---
 
@@ -79,6 +134,62 @@ Per-OS walkthroughs (including Docker, Windows, Homebrew) live in [INSTALL.md](I
 
 ---
 
+## The AI Assistant
+
+<p align="center">
+  <img src="docs/images/ai_assistant.png" alt="GeneVariate AI Assistant sidebar — state a goal in plain English and it runs the analysis" width="90%">
+  <br>
+  <sub>Open with the <strong>AI Assistant</strong> button or <strong>Ctrl+/</strong>. State a goal; the agent
+  fetches the data and runs the tools, entirely on your machine.</sub>
+</p>
+
+Instead of clicking through menus, you can **describe what you want** and let a reasoning agent
+carry it out. It decomposes the goal, **loads or downloads the data itself** (a whole GEO
+platform, or CELLxGENE single-cell → pseudo-bulk), runs the appropriate analysis tool, and
+narrates each step before writing a final answer. Results — table + chart + report — open in
+their own window so the chat stays readable. A **Stop** button cancels between steps.
+
+**Try prompts like:**
+
+```text
+load GPL570
+analyse the distribution of TP53 on GPL570
+compare BRCA1 between GPL570 and GPL96
+compare TP53 across microarray and rna-seq modalities
+run condition enrichment on GPL570 tumor vs normal
+run meta enrichment across GPL570 and GPL96 tumor vs normal
+infer TF activity on my platform
+fetch single cell data for EGFR in lung
+```
+
+**Tools the assistant can call** (each drives GeneVariate's real analysis API, not a reimplementation):
+
+| Tool | What it does |
+|---|---|
+| `list_platforms` | List the platforms currently loaded |
+| `load_geo_platform` | Load a GEO/GPL platform — **auto-downloads the whole platform** from GEO if not on disk |
+| `fetch_single_cell` | Fetch CELLxGENE single-cell → pseudo-bulk → register as a platform |
+| `gene_distribution` | Profile one gene's distribution (modality + mean/median/std/CV) |
+| `compare_gene` | Compare a gene across ≥2 platforms (stats + KS test) |
+| `compare_modalities` | Same gene across microarray/RNA-seq/single-cell on a harmonised scale |
+| `gene_connections` | Co-expression partners of a gene (Pearson/Spearman/ρ), consensus across sources |
+| `classify_distributions` | Classify every gene's modality (unimodal/bimodal/heavy-tailed) |
+| `rank_genes` | Top differential genes case-vs-control (no GSEA) |
+| `condition_enrichment` | Rank case-vs-control → prerank GSEA |
+| `variability_enrichment` | Rank by differential variability → GSEA |
+| `meta_enrichment` | Cross-platform consensus (rank-product / Stouffer / random-effects) → GSEA |
+| `activity_inference` | TF (CollecTRI) / pathway (PROGENy) activity per sample via decoupleR |
+| `run_analysis_code` | Run a sandboxed Python snippet over the loaded platforms |
+| `save_learned_tool` | Promote a working snippet into a persisted, reusable named tool |
+
+**Runs locally by default.** The assistant uses a local `gemma4:e2b` model via Ollama (auto-installed
+on first use) — no API key, no data leaves your machine. If the reasoning stack is unavailable it
+falls back to deterministic keyword routing, so it works either way. Optional hosted backends
+(Groq Llama-3.3-70B, or any OpenAI-compatible endpoint) are supported via `GENEVARIATE_AGENT_BACKEND`.
+Full backend/tuning details are in [Features](#ai-analysis-agent--conversational-assistant).
+
+---
+
 ## Features
 
 ### Data ingestion (cross-technology)
@@ -88,7 +199,6 @@ Per-OS walkthroughs (including Docker, Windows, Homebrew) live in [INSTALL.md](I
 | GEOmetadb | Microarray catalogue | Any GPL; queried from disk on low-RAM devices |
 | ARCHS4 | Bulk RNA-seq | Uniformly-processed GEO/SRA counts via `archs4py` |
 | GEO Series (GPL) | Microarray matrices | Auto probe-to-gene mapping + quantile normalization |
-| Raw NGS counts | RNA-seq | CSV/TSV (+ optional `.meta.csv` sidecar), 10x MTX dir, or `.h5ad` → QC → DESeq2 → GSEA (`core/count_io.py`) |
 | scRNA-seq pseudobulk | Single-cell → bulk | Via the canonical loader |
 | Methylation / peaks | β-values / intensities | Normalised through the same base class |
 
@@ -110,19 +220,6 @@ downstream tool consumes them identically.
 - **Embedding-clustered pseudo-cohorts** — auto-discover case/control groups from LLM labels
 
 See [Novel Analysis Methods](#novel-analysis-methods) for the statistical detail.
-
-### NGS raw-count differential expression
-
-- **RNA-seq DE window** (Analysis Tools → *RNA-seq DE (raw counts)*) — load a raw count
-  matrix (CSV/TSV, 10x MTX directory, or `.h5ad`), run QC (library size, genes detected,
-  %mito), DESeq2 median-of-ratios normalisation, negative-binomial DE via
-  [`pydeseq2`](https://github.com/owkin/PyDESeq2), then GSEA on the Wald statistic
-- Register the normalised matrix as a platform so every other window can reuse it — the
-  assistant's `run_ngs_de` tool takes a `register_as` name to publish log-CPM counts as a
-  **modality** you can then compare/connect against microarray and single-cell data
-- Headless API in `core/analysis/rnaseq.py` (`compute_qc_metrics`, `cpm_normalize`,
-  `deseq2_size_factors`, `run_deseq2`, `deseq_results_to_ranked`, `counts_to_platform_df`)
-- Optional extra: `pip install genevariate[rnaseq]` (pulls `pydeseq2` + `anndata`)
 
 ### Cross-modality gene analysis (`core/analysis/cross_modality.py`)
 
@@ -146,22 +243,33 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 ### AI analysis agent + conversational assistant
 
 - Collapsible chat sidebar — open it from the **AI Assistant** button in the top-right corner
-  of the header, the **Ctrl+/** shortcut, or Tools → *Assistant* — with two modes:
-  - **Agent** (default when the reasoning stack is available) — state a *goal* such as
-    *“analyse the distribution of TP53 in single-cell and GEO data and compare them”* and a
-    full **LangChain** reasoning agent decomposes it, **loads/fetches the data itself**
-    (GEO platforms or CELLxGENE single-cell → pseudo-bulk), runs the analysis tools, and
-    narrates its reasoning + each tool result live before writing a final answer. A **Stop**
-    button cancels between steps.
-  - **Confirm** — the classic single-tool safety path: one request routes to ONE tool and an
-    editable card shows the resolved parameters; **nothing runs until you click *Run***.
+  of the header, the **Ctrl+/** shortcut, or Tools → *Assistant*. It is **one unified window**:
+  state a *goal* such as *“analyse the distribution of TP53 in single-cell and GEO data and
+  compare them”* and a full **LangChain** reasoning agent decomposes it, **loads/fetches the
+  data itself** (GEO platforms — **auto-downloaded from GEO when not already on disk** — or
+  CELLxGENE single-cell → pseudo-bulk), runs the analysis tools, and narrates its reasoning +
+  each tool result live before writing a final answer. A **Stop** button cancels between steps.
+  When the reasoning stack isn't available it falls back to deterministic keyword routing, so
+  the assistant works either way.
+- **Results open in their own window:** the chat transcript stays short (a one-line summary per
+  step); the full **result table + embedded chart + markdown report** pops up in a separate,
+  scrollable results window (re-openable with *Open results window*) so the small chatbox never
+  gets crowded.
+- **Charts + chart understanding:** every visual tool draws its plot (distribution histogram,
+  cross-source overlay, enrichment/ranking bar) into the results window, and — because the local
+  model is text-only — each chart ships with a **data-grounded descriptor** (shape, center,
+  spread, outliers, direction, top terms) that the assistant reads to *interpret* the graph in
+  words. It understands the chart from the numbers behind it, not from pixels, so it stays fully
+  local with no vision model.
 - **Pluggable LLM backend** (`GENEVARIATE_AGENT_BACKEND`): because the agent drives
   GeneVariate's *Python API* (not the screen), a reliable tool-caller matters more than size —
   no vision model needed.
-  - `groq` (**default**) — Groq's free hosted **Llama-3.3-70B**, the fastest/strongest
-    tool-caller. Paste a free key once in-app (console.groq.com/keys); it's saved thereafter.
-  - `ollama` — a fully **local** model (default `qwen2.5:7b`; `qwen2.5:14b`+ for deeper
-    reasoning), private + offline, **auto-installed and auto-pulled** on first use.
+  - `ollama` (**default**) — a fully **local** model (default `gemma4:e2b`; `qwen2.5:14b`+
+    for deeper reasoning), private + offline, **no API key**, **auto-installed and
+    auto-pulled** on first use. gemma4 emits native Ollama tool-calls and drives the full
+    ReAct agent locally; a deterministic keyword-router fallback catches any flaky turn.
+  - `groq` — Groq's free hosted **Llama-3.3-70B**, the fastest/strongest tool-caller. Paste
+    a free key once in-app (console.groq.com/keys); it's saved thereafter.
   - anything else — an OpenAI-compatible endpoint (OpenRouter / Gemini / Cerebras / NVIDIA NIM)
     via `GENEVARIATE_AGENT_BASE_URL` + `GENEVARIATE_AGENT_API_KEY`.
 - **Zero manual setup:** the first time you use Agent mode the app auto-installs the LLM stack
@@ -170,7 +278,7 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   declined it drops to the local model; if that's unavailable it falls back to a deterministic
   heuristic planner, then keyword routing — the app works either way. The offline planner
   chains data loading with the real analyses (condition/variability/meta enrichment, ranking,
-  modality, DESeq2) so agentic goals still run end-to-end without any LLM.
+  modality) so agentic goals still run end-to-end without any LLM.
 - **Optimized local inference (quantization):** the local model runs as a **quantized GGUF**
   through Ollama/llama.cpp so a 7B fits ~8 GB VRAM at roughly double the fp16 throughput.
   Pick the GGUF level with `GENEVARIATE_AGENT_QUANT` (`q4_K_M` default → `q5_K_M` → `q8_0`;
@@ -179,22 +287,19 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
   and `GENEVARIATE_AGENT_NUM_CTX` / `GENEVARIATE_AGENT_NUM_PREDICT` tune context/output length.
   Groq is a hosted LPU service and is already optimally served, so no client-side tuning applies.
 - Tools (each calls the existing analysis API rather than reimplementing it, and returns a
-  markdown **description + analysis** you can open in a scrollable *View report* window):
-  `list_platforms`, `load_geo_platform`, `fetch_single_cell`, `gene_distribution`,
+  markdown **description + analysis** shown in the separate results window):
+  `list_platforms`, `load_geo_platform` (**auto-downloads the platform from GEO** if it isn't
+  on disk, bounded by `max_gse`), `fetch_single_cell`, `gene_distribution`,
   `compare_gene`, `compare_modalities` (same gene across microarray/RNA-seq/single-cell,
   harmonised), `gene_connections` (co-expression links within a source or consensus across
   modalities), `classify_distributions` (modality landscape), `condition_enrichment`,
   `variability_enrichment`, `meta_enrichment` (cross-platform consensus: rank-product /
   Stouffer / random-effects + GSEA), `activity_inference` (TF/pathway activity via decoupleR),
-  `run_analysis_code` (sandboxed Python over the loaded platforms), `rank_genes`, `run_ngs_de`.
+  `run_analysis_code` (sandboxed Python over the loaded platforms), `rank_genes`.
 - **Robust to Llama tool-call quirks:** Llama-3.x occasionally emits a tool call in its
   *native text* form (`<function=name>{…}</function>`) inside the message content instead of
-  through the structured tool-calls API — most often for the tool with the most parameters
-  (`run_ngs_de`). `run_agent` detects and executes that leaked call so the reasoning loop still
-  produces a real result.
-- **DESeq2 from a bare counts CSV:** a count matrix carries no design factor, so `load_counts`
-  auto-discovers a sibling metadata table (`<counts>.meta.csv` / `metadata.csv`, sample column
-  + condition columns) and hands it to the DESeq2 path — no h5ad required.
+  through the structured tool-calls API. `run_agent` detects and executes that leaked call so
+  the reasoning loop still produces a real result.
 - Tk-free core in `core/chatbot/` (`build_registry`, `route`, `run_agent`, `agent_available`).
 - Optional extra (pre-provision; otherwise auto-installed on first use):
   `pip install genevariate[agent]` (`langchain` + `langchain-groq` + `langchain-ollama`).
@@ -204,10 +309,10 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 - Resource-aware worker scaling (1–210 threads) driven by live CPU/RAM/VRAM/thermal metrics
 - GPU auto-detection (NVIDIA / AMD) with automatic CPU fallback
 - Lazy, pay-for-what-you-use imports: `core/analysis` loads each submodule (and its heavy
-  optional deps) only on first access via PEP 562 `__getattr__`, so the tensor stack
-  (`torch` via `pydeseq2`) and `decoupler` are pulled into memory only when DESeq2 or
-  activity inference is actually run — importing the analysis package no longer drags the
-  GPU/tensor stack in at startup (base import ≈4× faster, no CUDA init for light paths)
+  optional deps) only on first access via PEP 562 `__getattr__`, so heavy optional deps like
+  `decoupler` and the batch-integration stack are pulled into memory only when that analysis
+  is actually run — importing the analysis package no longer drags the GPU/tensor stack in at
+  startup (base import ≈4× faster, no CUDA init for light paths)
 - Low-RAM mode: GEOmetadb queried directly from disk (WAL + indexes + mmap), no OOM
 - Docker image with bundled Ollama and automatic model pulling
 
@@ -234,8 +339,6 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 |---|---|
 | `core/sources/base.py` | Canonical-format contract + shared CSV writer |
 | `core/sources/archs4.py` | ARCHS4 bulk RNA-seq ingestion |
-| `core/count_io.py` | Raw-count readers (CSV/TSV, 10x MTX, h5ad) → genes × samples |
-| `core/analysis/rnaseq.py` | QC + CPM + DESeq2 size factors/DE + GSEA bridge |
 | `core/chatbot/` | Tk-free assistant: tool registry, router, LangChain reasoning agent + heuristic planner |
 | `core/db_loader.py` | Shared GEOmetadb loader (decompress once, tier-adapted cache) |
 | `core/gpl_downloader.py` | GPL annotation download, probe-to-gene, quantile normalization |
@@ -250,21 +353,41 @@ meaningless. This module makes the comparison honest and adds gene–gene connec
 | `core/analysis/meta_enrichment.py` | Rank-product / Stouffer cross-platform combination |
 | `core/analysis/bimodality.py` | Distribution-gated gene filtering |
 | `core/analysis/pseudo_cohorts.py` | Embedding-clustered auto-cohorts |
+| `core/analysis/overdispersion.py` | Beta-binomial ρ, design effect, effective sample size, bootstrap-by-study |
+| `core/analysis/synergy.py` | Multiplicative null + k-way log-linear interaction for conjunction boxes |
+| `core/analysis/box_model.py` | Cross-fitted, isotonic-calibrated P(label \| genes); box integration + relaxation attribution |
 | `core/ai_engine.py` | 8-class distribution classifier, outliers, transform recommender |
 | `core/statistics.py` | Wilcoxon, Welch t, Wasserstein, Cohen's d, Cliff's delta |
+| `gui/theme.py` | Shared Frutiger Aero palette every window draws from |
 | `gui/app.py` | Main 3-step workflow application |
+| `gui/region_analysis.py` | Region window: distributions, enrichment, synergy, box model, samples |
 
 Full file tree is in [INSTALL.md](INSTALL.md#project-layout).
 
 ---
 
-## Usage
+## Usage & Workflow
 
-### GUI — 3-step workflow
+### GUI — the guided workflow
 
-1. **Search** — pick a GPL platform (or ARCHS4 bulk RNA-seq), query GEO, select experiments
-2. **Extract** — watch the multi-phase LLM pipeline label every sample in real time
-3. **Analyse** — histograms, PCA, region selection, group comparison, enrichment
+The main window walks you through three stages (see [What Can You Do?](#what-can-you-do) for the
+full capability map):
+
+1. **Load platforms** — click a preset platform (GPL570, GPL96), **Download Platform** to pull any
+   GPL from GEO, **Load RNA-seq from ARCHS4…**, fetch **Single-cell (CELLxGENE)**, or **+ Add Custom
+   Platform** for your own CSV. *(Optional)* expand **Step 1: Discover Experiments** to search
+   GEOmetadb / ARCHS4 / CELLxGENE / Expression Atlas by keyword and batch-download matches.
+2. **Classify samples** — under **Step 2**, choose your label source (**LLM (Ollama)** for automatic
+   extraction, **Label Files** for your own, or **Manual Labeling**) and run **LLM Extraction** to
+   watch the multi-phase pipeline label every sample in real time.
+3. **Analyse** — use the **Analysis Tools** row (Gene Distribution Explorer, Distribution Analysis,
+   Label Enrichment, Single-cell) or the **Tools** menu (Cross-Platform Analysis, Enrichment,
+   Pseudo-Cohorts, Activity Inference). Or press **Ctrl+/** and ask the [AI Assistant](#the-ai-assistant).
+
+The interface is a soft Frutiger-Aero theme: buttons, LabelFrame cards,
+entry/combobox fields and notebook tabs are all rendered as anti-aliased
+rounded capsules (PIL 9-slice ttk image elements), degrading to the plain
+square styles if imaging is unavailable.
 
 ### Headless / CLI
 
@@ -360,14 +483,44 @@ thresholded on FDR rather than nominal p, and the random-effects meta-combiner r
 routine. Effect sizes (log-fold-change / pooled effect) are carried through unchanged so calls
 are judged on both significance *and* magnitude.
 
-### DESeq2 LFC shrinkage
+### Study-aware evidence: ρ, design effect and effective sample size
 
-`run_deseq2` gains a `shrink=True` flag that applies pydeseq2's native **apeglm** shrinkage
-(`DeseqStats.lfc_shrink`) to the fitted coefficient. This pulls the magnitude of noisy,
-low-information log-fold-changes toward zero while leaving well-powered genes essentially
-untouched, giving stable effect-size estimates for ranking and GSEA. No new dependency — it
-uses the shrinkage already shipped with `pydeseq2`, and silently degrades to unshrunken LFCs if
-the coefficient name can't be resolved across pydeseq2 API versions.
+Samples from GEO are not independent draws. A label that looks like a strong finding across 700
+samples may live in four studies, and counting those 700 as 700 is how a batch artefact becomes a
+result. `core/analysis/overdispersion.py` estimates the **beta-binomial intra-cluster correlation
+ρ** across studies by moments, converts it into **Kish's design effect** `1 + (m̄ − 1)ρ`, and
+reports an **effective sample size** `n_eff = n / deff` beside the raw count. Confidence intervals
+on fold change are a percentile bootstrap that resamples **studies, not samples**, so the interval
+widens honestly when the evidence is concentrated. `enrichment_diagnostics` returns
+`{n_gse, rho, mean_cluster, n_eff_sel, ci_low, ci_high}` per label value, and the enrichment tab
+surfaces `n_GSE` and `n_eff` as columns rather than burying them.
+
+### Multi-gene conjunction synergy
+
+Brushing several genes at once asks whether the combination does more than the genes do separately.
+`core/analysis/synergy.py` compares the observed lift inside a conjunction box against the
+**multiplicative null** — the product of each gene's marginal lift — and reports the **k-way
+log-linear interaction odds ratio** over the 2^k gene-combination cells, with a Haldane–Anscombe
+correction and a study-bootstrapped CI. The statistic is signed: an OR above 1 is genuine synergy,
+below 1 is mutual exclusion. When any cell is empty the interaction is **not identified**, so
+`synergy` comes back NaN and `empty_cells` says why, rather than returning a confident number from
+a degenerate table. Surfaced as the **Gene Synergy** tab.
+
+### Calibrated box model — reading a box that holds nothing
+
+Counting stops working before the question does: five genes brushed at their top quintile select
+0.2⁵ ≈ 0.03% of a platform, so a box that should hold hundreds of samples holds none.
+`core/analysis/box_model.py` fits `P(label | expression)` over the whole platform with gradient
+boosting, **cross-fitted by study** (`GroupKFold` on GSE, never on samples), then wraps it in a
+**cross-fitted isotonic calibration** layer so "0.3" means "happens 30% of the time" — with the
+Brier score, expected calibration error and reliability curve reported so the claim is checkable.
+The box is then read two ways: `p_support` over the real samples in it, and `p_uniform` by Monte
+Carlo integration over its volume, which stays defined when the box is empty. `n_support` is always
+returned next to it so extrapolation is labelled as extrapolation. Attribution is by **relaxation**
+— each gene's bound is widened back to the data range in turn and the drop in integrated
+probability is that constraint's contribution — which is exact rather than an approximation, and
+answers the question actually being asked: which gene is holding this box up. Surfaced as the
+**Box Model** tab. Requires `scikit-learn`.
 
 ### Compositional-bias-robust co-expression (proportionality ρ)
 
@@ -399,10 +552,10 @@ batch-corrected values.
 ### Per-run reproducibility manifest
 
 `core/reproducibility.py` captures four pillars for any analysis: **parameters**, **package
-versions** (numpy/pandas/scipy/pydeseq2/gseapy/…), the **random seed**, and a content-sensitive
+versions** (numpy/pandas/scipy/gseapy/…), the **random seed**, and a content-sensitive
 **SHA-256 hash** of every input DataFrame/array. `build_manifest` returns a JSON-able record
 (with environment + timestamp) and `manifest_to_markdown` renders it for the report window; the
-assistant's condition/NGS/meta tools attach a manifest so a result can be re-derived exactly.
+assistant's condition/meta tools attach a manifest so a result can be re-derived exactly.
 
 ### Sandboxed analysis code execution
 
@@ -426,7 +579,28 @@ pytest
 
 The suite covers every `core/analysis/` module and the cross-technology source loaders
 (`tests/test_variability.py`, `test_enrichment.py`, `test_meta_enrichment.py`,
-`test_bimodality.py`, `test_pseudo_cohorts.py`, `test_sources.py`).
+`test_bimodality.py`, `test_pseudo_cohorts.py`, `test_sources.py`, `test_overdispersion.py`,
+`test_synergy.py`, `test_box_model.py`).
+
+### End-to-end validation on planted ground truth
+
+Unit tests check that a function returns a number. They do not check that the app, driven the way a
+user drives it, recovers an answer that was decided before the analysis ran. `tools/` carries a
+harness that does:
+
+```bash
+python3 tools/make_synthetic_platform.py     # writes a platform + labels + GROUND_TRUTH.md
+python3 tools/validate_synthetic.py          # 24 PASS/FAIL claims against what was planted
+```
+
+The generator plants a specific set of structures — an AND gate (`Liver` = two genes high
+together), a single-gene marker (`Brain`, and `Sex` from XIST), a label confined to four studies
+and driven by *no* gene at all, a gene that means nothing, and a label column that is pure noise —
+then `GROUND_TRUTH.md` states what each tab must report. The validator checks the honesty layer
+discounts the four-study label (`n_eff` ≪ `n`), that BH-FDR kills the noise column, that synergy
+separates a real conjunction from a decoy pairing, that calibration does not get worse, and that
+relaxation attribution charges the meaningless gene nothing. The same two CSVs load in the GUI, so
+the numbers on screen can be read against the same document.
 
 ### System requirements
 

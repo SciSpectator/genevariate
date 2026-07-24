@@ -55,10 +55,10 @@ except Exception as _exc:  # pragma: no cover - exercised only w/o extras
 
 
 # ---- backend + model configuration ----------------------------------
-DEFAULT_BACKEND = "groq"
+DEFAULT_BACKEND = "ollama"
 _BACKEND_MODELS = {
     "groq": "llama-3.3-70b-versatile",
-    "ollama": "qwen2.5:7b",
+    "ollama": "gemma4:e2b",
     "openai": "gpt-4o-mini",
 }
 DEFAULT_AGENT_MODEL = _BACKEND_MODELS[DEFAULT_BACKEND]
@@ -177,22 +177,60 @@ SYSTEM_PROMPT = (
     "Workflow:\n"
     "1. Understand the user's goal (a gene, a platform, single-cell vs GEO, a "
     "comparison, an enrichment).\n"
-    "2. Make sure the required data is loaded BEFORE analysing it: use "
-    "`load_geo_platform` for a GEO/GPL microarray id, or `fetch_single_cell` to "
-    "pull and pseudo-bulk CELLxGENE single-cell data. Use `list_platforms` to "
-    "see what is already loaded.\n"
+    "2. REASON about WHICH dataset the user actually wants, then obtain it "
+    "yourself before analysing. Choose the right source for the intent — it is "
+    "NOT always a GEO platform:\n"
+    "   • a GEO/GPL microarray id (e.g. GPL570) → `load_geo_platform` (it "
+    "AUTO-DOWNLOADS from GEO when the platform isn't on disk);\n"
+    "   • single-cell / scRNA-seq / a cell type / tissue / 'CELLxGENE' → "
+    "`fetch_single_cell` (pulls the census and pseudo-bulks it).\n"
+    "   Call `list_platforms` first to see what is already loaded. If the data "
+    "the user described is NOT loaded, DECIDE ON YOUR OWN which acquisition tool "
+    "fits and call it — infer the source from the wording, don't assume GEO. "
+    "NEVER stop to ask the user to download data and NEVER tell them a file is "
+    "missing; obtain it and continue. Only report a data problem if the tool "
+    "itself returns an error you cannot work around.\n"
     "3. Run the analysis: `gene_distribution` to profile one gene on one "
     "platform; `compare_gene` to contrast a gene across two or more sources; "
     "`condition_enrichment` / `variability_enrichment` / `rank_genes` for "
-    "case-vs-control ranking + GSEA; `run_ngs_de` for raw-count DESeq2.\n"
+    "case-vs-control ranking + GSEA.\n"
     "4. When comparing single-cell and GEO for a gene, first load/fetch BOTH "
-    "sources, then call `compare_gene` with that gene and both platform names.\n\n"
+    "sources, then call `compare_gene` with that gene and both platform names.\n"
+    "5. For an open-ended computation with no dedicated tool, use "
+    "`run_analysis_code` (sandboxed Python: read `platforms`/`params`, set "
+    "`result`). If that snippet solves a task the user is likely to repeat, "
+    "call `save_learned_tool` to PROMOTE it into a new persisted named tool — "
+    "you can extend your own toolset this way.\n\n"
     "Rules: call one tool at a time, read its result, then decide the next step. "
     "Prefer real platform names returned by earlier tool calls. When you have "
     "enough information, STOP calling tools and write a short, concrete summary "
     "of the findings (distribution class, key statistics, whether sources differ "
-    "and how). Keep the final answer factual and grounded in tool outputs."
+    "and how). Keep the final answer factual and grounded in tool outputs. "
+    "Never end a turn without either calling a tool or writing a summary of a "
+    "tool result you already received. Do NOT ask the user to clarify a metadata "
+    "column, case/control labels, or gene-set libraries — every tool auto-selects "
+    "sensible defaults, so just call the tool. Never reload a platform that "
+    "`list_platforms` already shows as loaded."
 )
+
+
+def _unproductive(results: List["ToolResult"], final_text: str) -> bool:
+    """True when the reasoning loop produced no usable analysis answer.
+
+    Catches the failure modes a small local model falls into: a flaky empty
+    turn, a tool error surfaced as the final answer, or a clarifying question
+    that stalls instead of running with sensible defaults.
+    """
+    t = (final_text or "").strip().lower()
+    if not t:
+        return True
+    bad = ("i encountered an error", "error from ", "did not succeed",
+           "finished without", "please provide", "please specify",
+           "could not run", "no matching platform", "which gene",
+           "which platform")
+    if any(b in t for b in bad):
+        return True
+    return not any(getattr(r, "ok", False) for r in results)
 
 
 # ---- registry Tool -> LangChain StructuredTool ----------------------
@@ -654,6 +692,31 @@ def run_agent(
         except Exception as exc:
             on_event("tool_error", f"{name} failed: {exc}", None)
             final_text = f"ERROR from {name}: {exc}"
+
+    # Reliability net for weak local models: if the reasoning loop finished
+    # without a successful analysis — a flaky empty turn, a tool error, or a
+    # clarifying question — fall back to the deterministic keyword router and
+    # run the single tool it maps the goal to. Never raises.
+    if not reply.stopped and _unproductive(reply.results, final_text):
+        try:
+            from .router import _keyword_route
+            act = _keyword_route(goal, registry)
+            name = getattr(act, "tool", None)
+            if name in registry:
+                tool = registry[name]
+                raw = {k: v for k, v in (act.params or {}).items()
+                       if v not in (None, "")}
+                on_event("tool_start", f"{name}({raw})", None)
+                resolved = tool.coerce(tool.resolver(app, raw))
+                result = tool.executor(app, resolved,
+                                       progress_cb or (lambda v, t: None))
+                reply.results.append(result)
+                on_event("tool_result", result.summary, result)
+                if result.ok:
+                    final_text = _observation(result)
+                    reply.source = "router-fallback"
+        except Exception as exc:
+            on_event("tool_error", f"router fallback failed: {exc}", None)
 
     if not final_text:
         oks = [r for r in reply.results if r.ok]
