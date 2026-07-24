@@ -19,6 +19,22 @@ _EXPORTS = {
     "enrichment_report_markdown": "enrichment",
     "benjamini_hochberg": "enrichment",
     "DEFAULT_LIBRARIES": "enrichment",
+    # overdispersion / study-clumping corrections (numpy + scipy)
+    "group_counts": "overdispersion",
+    "estimate_rho": "overdispersion",
+    "effective_sample_size": "overdispersion",
+    "design_effect": "overdispersion",
+    "enrichment_diagnostics": "overdispersion",
+    # multi-gene conjunction boxes / multiplicative-null synergy (numpy + scipy)
+    "conjunction_mask": "synergy",
+    "multiplicative_null": "synergy",
+    "synergy_diagnostics": "synergy",
+    # calibrated P(label | genes) over a box (scikit-learn)
+    "BoxLabelModel": "box_model",
+    "fit_label_model": "box_model",
+    "reliability_curve": "box_model",
+    "integrate_box": "box_model",
+    "relaxation_attribution": "box_model",
     # variability
     "rank_genes_by_variability": "variability",
     "run_variability_gsea": "variability",
