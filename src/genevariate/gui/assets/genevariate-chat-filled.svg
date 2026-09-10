@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Open GeneVariate assistant">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0EA5A4"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded tile -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- speech bubble -->
+  <path d="M40 34 H88 a12 12 0 0 1 12 12 V74 a12 12 0 0 1 -12 12 H60 l-16 14 V86 a12 12 0 0 1 -12 -12 V46 a12 12 0 0 1 12 -12 Z"
+        fill="#FFFFFF"/>
+  <!-- DNA double helix (in the tile gradient color, cut from the white bubble) -->
+  <g fill="none" stroke="#4F46E5" stroke-width="4.5" stroke-linecap="round">
+    <path d="M54 46 C 78 54 78 70 54 78"/>
+    <path d="M76 46 C 52 54 52 70 76 78"/>
+    <path d="M57 55 H73"/>
+    <path d="M57 69 H73"/>
+  </g>
+  <!-- AI sparkle -->
+  <path d="M96 24 L100 34 L110 38 L100 42 L96 52 L92 42 L82 38 L92 34 Z" fill="#FBBF24"/>
+</svg>

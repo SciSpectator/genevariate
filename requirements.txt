@@ -1,0 +1,40 @@
+# GeneVariate - Required Dependencies
+# Install: pip install -r requirements.txt
+
+# Core data science
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+scikit-learn
+
+# GEO database / bioinformatics
+GEOparse
+requests
+psutil
+
+# RNA-seq counts: edgeR's TMM factors, used by normalize_platform on every
+# matrix _looks_like_counts() recognises as read counts.
+rnanorm
+
+# Hartigan's dip test - the unimodality gate in core/analysis/bimodality.py
+diptest
+
+# AI / LLM
+ollama
+
+# LLM-GEO-Label-Extractor pipeline (optional - install if you plan to run
+# `genevariate-llm-extract` or `genevariate --llm-extract`).
+# Phase 1c semantic curator (BioLORD-2023) + DSPy-compiled prompts:
+# dspy-ai>=2.5
+# sentence-transformers>=2.7
+# torch>=1.11
+# transformers>=4.21
+
+# Image handling (app icon / logo in GUI)
+Pillow
+
+# Tkinter is part of Python stdlib but may need system package:
+#   Ubuntu/Debian: sudo apt install python3-tk
+#   Fedora: sudo dnf install python3-tkinter

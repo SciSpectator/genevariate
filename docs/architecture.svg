@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 830" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="hdr" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E2A45"/>
+      <stop offset="100%" stop-color="#1565C0"/>
+    </linearGradient>
+    <linearGradient id="src" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E8EEF6"/>
+      <stop offset="100%" stop-color="#CFDDEE"/>
+    </linearGradient>
+    <linearGradient id="canon" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E0F5F7"/>
+      <stop offset="100%" stop-color="#BEE6EC"/>
+    </linearGradient>
+    <linearGradient id="lab" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F2EAF8"/>
+      <stop offset="100%" stop-color="#DFCBEE"/>
+    </linearGradient>
+    <linearGradient id="reg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3E0"/>
+      <stop offset="100%" stop-color="#FBE0B8"/>
+    </linearGradient>
+    <linearGradient id="ana" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E7F3EA"/>
+      <stop offset="100%" stop-color="#C6E3CD"/>
+    </linearGradient>
+    <linearGradient id="hon" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FDECEC"/>
+      <stop offset="100%" stop-color="#F6CFCF"/>
+    </linearGradient>
+    <filter id="sh" x="-3%" y="-3%" width="106%" height="112%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#00000022"/>
+    </filter>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0E2A45"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="830" rx="12" fill="#FBFCFD"/>
+
+  <rect x="30" y="15" width="1140" height="46" rx="8" fill="url(#hdr)" filter="url(#sh)"/>
+  <text x="600" y="44" text-anchor="middle" font-size="19" font-weight="bold" fill="#FFFFFF">GeneVariate: from four kinds of measurement to one label comparison</text>
+
+  <!-- ROW 1: sources -->
+  <text x="30" y="84" font-size="11" font-weight="bold" fill="#0E2A45">1. Ingestion, one loader per technology</text>
+
+  <rect x="30" y="94" width="265" height="62" rx="8" fill="url(#src)" stroke="#1565C0" stroke-width="1.4" filter="url(#sh)"/>
+  <text x="162" y="116" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#0E2A45">GEO microarray</text>
+  <text x="162" y="132" text-anchor="middle" font-size="9.5" fill="#1565C0">any GPL, downloaded and probe mapped</text>
+  <text x="162" y="146" text-anchor="middle" font-size="9.5" fill="#1565C0">log2 intensity</text>
+
+  <rect x="315" y="94" width="265" height="62" rx="8" fill="url(#src)" stroke="#1565C0" stroke-width="1.4" filter="url(#sh)"/>
+  <text x="447" y="116" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#0E2A45">Bulk RNA-seq</text>
+  <text x="447" y="132" text-anchor="middle" font-size="9.5" fill="#1565C0">ARCHS4, uniformly reprocessed counts</text>
+  <text x="447" y="146" text-anchor="middle" font-size="9.5" fill="#1565C0">TMM to log-CPM</text>
+
+  <rect x="600" y="94" width="265" height="62" rx="8" fill="url(#src)" stroke="#1565C0" stroke-width="1.4" filter="url(#sh)"/>
+  <text x="732" y="116" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#0E2A45">Single cell</text>
+  <text x="732" y="132" text-anchor="middle" font-size="9.5" fill="#1565C0">CELLxGENE Census, cells aggregated</text>
+  <text x="732" y="146" text-anchor="middle" font-size="9.5" fill="#1565C0">into per donor, per cell type profiles</text>
+
+  <rect x="885" y="94" width="265" height="62" rx="8" fill="url(#src)" stroke="#1565C0" stroke-width="1.4" filter="url(#sh)"/>
+  <text x="1017" y="116" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#0E2A45">Your own matrix</text>
+  <text x="1017" y="132" text-anchor="middle" font-size="9.5" fill="#1565C0">any CSV of samples by genes</text>
+  <text x="1017" y="146" text-anchor="middle" font-size="9.5" fill="#1565C0">read as given</text>
+
+  <line x1="162" y1="156" x2="162" y2="180" stroke="#1565C0" stroke-width="1.4"/>
+  <line x1="447" y1="156" x2="447" y2="180" stroke="#1565C0" stroke-width="1.4"/>
+  <line x1="732" y1="156" x2="732" y2="180" stroke="#1565C0" stroke-width="1.4"/>
+  <line x1="1017" y1="156" x2="1017" y2="180" stroke="#1565C0" stroke-width="1.4"/>
+
+  <!-- canonical -->
+  <rect x="30" y="180" width="1120" height="54" rx="8" fill="url(#canon)" stroke="#00838F" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="42" y="188" width="196" height="21" rx="4" fill="#00838F"/>
+  <text x="140" y="203" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">One canonical table</text>
+  <text x="250" y="203" font-size="11" font-style="italic" fill="#00695C">GSM | series_id | GENE1 | GENE2 | ...</text>
+  <text x="42" y="225" font-size="9.5" fill="#00695C">Values stay on their own platform scale. The label comparison never compares them across platforms, which is what lets it cross technologies. series_id is carried from here on and makes the study corrections below possible.</text>
+
+  <line x1="300" y1="234" x2="300" y2="262" stroke="#0E2A45" stroke-width="1.8" marker-end="url(#ar)"/>
+  <line x1="880" y1="234" x2="880" y2="262" stroke="#0E2A45" stroke-width="1.8" marker-end="url(#ar)"/>
+
+  <!-- ROW 2: labels + brush -->
+  <rect x="30" y="264" width="540" height="128" rx="9" fill="url(#lab)" stroke="#6A1B9A" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="42" y="272" width="130" height="21" rx="4" fill="#6A1B9A"/>
+  <text x="107" y="287" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">2. Labels</text>
+  <text x="184" y="287" font-size="9.5" font-style="italic" fill="#6A1B9A">attach a file, or run the vendored extractor</text>
+  <text x="42" y="310" font-size="10" fill="#4A148C">Five fields and no others: Tissue, Condition, Treatment, Sex, Age.</text>
+  <text x="42" y="328" font-size="10" fill="#4A148C">Tissue, Condition and Treatment carry an accession beside the value.</text>
+  <rect x="42" y="338" width="158" height="20" rx="4" fill="#8E24AA"/>
+  <text x="121" y="352" text-anchor="middle" font-size="9" fill="#FFFFFF">MeSH, a known concept</text>
+  <rect x="208" y="338" width="158" height="20" rx="4" fill="#AB47BC"/>
+  <text x="287" y="352" text-anchor="middle" font-size="9" fill="#FFFFFF">Cellosaurus, a cell line</text>
+  <rect x="374" y="338" width="184" height="20" rx="4" fill="#CE93D8"/>
+  <text x="466" y="352" text-anchor="middle" font-size="9" fill="#4A148C">local cluster, nothing asserted</text>
+  <text x="42" y="378" font-size="9.5" font-style="italic" fill="#6A1B9A">Kept apart, because a liver biopsy and a hepatoma line in a flask are not one category.</text>
+
+  <rect x="610" y="264" width="540" height="128" rx="9" fill="url(#reg)" stroke="#E65100" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="622" y="272" width="130" height="21" rx="4" fill="#E65100"/>
+  <text x="687" y="287" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">3. Region</text>
+  <text x="764" y="287" font-size="9.5" font-style="italic" fill="#E65100">Gene Distribution Explorer</text>
+  <text x="622" y="310" font-size="10" fill="#BF360C">One gene is plotted on every selected platform at once.</text>
+  <text x="622" y="328" font-size="10" fill="#BF360C">A range is brushed on each, on that platform's own scale.</text>
+  <text x="622" y="346" font-size="10" fill="#BF360C">Brushing several genes intersects them into a conjunction box.</text>
+  <text x="622" y="378" font-size="9.5" font-style="italic" fill="#E65100">A brush defines a set of samples. It asserts nothing and computes nothing.</text>
+
+  <line x1="570" y1="328" x2="606" y2="328" stroke="#6A1B9A" stroke-width="1.8" marker-end="url(#ar)"/>
+  <line x1="590" y1="392" x2="590" y2="418" stroke="#0E2A45" stroke-width="1.8" marker-end="url(#ar)"/>
+
+  <!-- ROW 3: analyses -->
+  <rect x="30" y="420" width="770" height="240" rx="9" fill="url(#ana)" stroke="#2E7D32" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="42" y="428" width="290" height="21" rx="4" fill="#2E7D32"/>
+  <text x="187" y="443" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">4. What is in the region, by label</text>
+  <text x="344" y="443" font-size="9.5" font-style="italic" fill="#2E7D32">ten tabs, one region, one label column</text>
+
+  <rect x="45" y="458" width="368" height="90" rx="6" fill="#F4FAF5" stroke="#66BB6A" stroke-width="1"/>
+  <text x="57" y="477" font-size="10.5" font-weight="bold" fill="#1B5E20">Enrichment, Frequency, Labels</text>
+  <text x="57" y="494" font-size="9" fill="#388E3C">Which label values are over represented against the</text>
+  <text x="57" y="507" font-size="9" fill="#388E3C">platform background. Fisher on a table of sample counts,</text>
+  <text x="57" y="520" font-size="9" fill="#388E3C">which is the same quantity on every technology.</text>
+  <text x="57" y="538" font-size="9" font-style="italic" fill="#2E7D32">Every row carries n_GSE, rho and n_eff beside the count.</text>
+
+  <rect x="425" y="458" width="368" height="90" rx="6" fill="#F4FAF5" stroke="#66BB6A" stroke-width="1"/>
+  <text x="437" y="477" font-size="10.5" font-weight="bold" fill="#1B5E20">Comparison</text>
+  <text x="437" y="494" font-size="9" fill="#388E3C">The regions against each other, not each against the rest.</text>
+  <text x="437" y="507" font-size="9" fill="#388E3C">One BH-FDR over the whole grid, pairwise odds ratios</text>
+  <text x="437" y="520" font-size="9" fill="#388E3C">carrying Jaccard overlap, heterogeneity across regions.</text>
+  <text x="437" y="538" font-size="9" font-style="italic" fill="#2E7D32">Regions on different platforms are pooled, not concatenated.</text>
+
+  <rect x="45" y="558" width="368" height="90" rx="6" fill="#F4FAF5" stroke="#66BB6A" stroke-width="1"/>
+  <text x="57" y="577" font-size="10.5" font-weight="bold" fill="#1B5E20">Gene Synergy</text>
+  <text x="57" y="594" font-size="9" fill="#388E3C">Does the combination do more than the genes do apart.</text>
+  <text x="57" y="607" font-size="9" fill="#388E3C">k-way log-linear interaction odds ratio over the 2^k cells,</text>
+  <text x="57" y="620" font-size="9" fill="#388E3C">against the product of the single-gene lifts.</text>
+  <text x="57" y="638" font-size="9" font-style="italic" fill="#2E7D32">An empty cell returns not identified, never a confident number.</text>
+
+  <rect x="425" y="558" width="368" height="90" rx="6" fill="#F4FAF5" stroke="#66BB6A" stroke-width="1"/>
+  <text x="437" y="577" font-size="10.5" font-weight="bold" fill="#1B5E20">Box Model, Label ML</text>
+  <text x="437" y="594" font-size="9" fill="#388E3C">P(label given expression), fitted on the whole platform and</text>
+  <text x="437" y="607" font-size="9" fill="#388E3C">isotonically calibrated, both cross fitted with folds split</text>
+  <text x="437" y="620" font-size="9" fill="#388E3C">by study. Read by integration, so an empty box still reads.</text>
+  <text x="437" y="638" font-size="9" font-style="italic" fill="#2E7D32">Attribution widens each bound back in turn, which is exact.</text>
+
+  <!-- honesty column -->
+  <rect x="820" y="420" width="330" height="240" rx="9" fill="url(#hon)" stroke="#C62828" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="832" y="428" width="230" height="21" rx="4" fill="#C62828"/>
+  <text x="947" y="443" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">Applied to every number above</text>
+
+  <text x="832" y="470" font-size="10" font-weight="bold" fill="#8E1010">Samples arrive in studies</text>
+  <text x="832" y="486" font-size="9" fill="#B71C1C">A region holding 700 samples from four experiments</text>
+  <text x="832" y="499" font-size="9" fill="#B71C1C">is not 700 independent readings.</text>
+
+  <rect x="832" y="512" width="306" height="22" rx="4" fill="#FFFFFF" stroke="#E57373"/>
+  <text x="842" y="527" font-size="9.5" fill="#8E1010">rho, the correlation within a study</text>
+
+  <rect x="832" y="540" width="306" height="22" rx="4" fill="#FFFFFF" stroke="#E57373"/>
+  <text x="842" y="555" font-size="9.5" fill="#8E1010">deff = 1 + (mean cluster size minus 1) x rho</text>
+
+  <rect x="832" y="568" width="306" height="22" rx="4" fill="#FFFFFF" stroke="#E57373"/>
+  <text x="842" y="583" font-size="9.5" fill="#8E1010">n_eff = n / deff, reported beside every raw n</text>
+
+  <rect x="832" y="596" width="306" height="22" rx="4" fill="#FFFFFF" stroke="#E57373"/>
+  <text x="842" y="611" font-size="9.5" fill="#8E1010">intervals resample studies, not samples</text>
+
+  <text x="832" y="638" font-size="9" font-style="italic" fill="#C62828">Without this, a batch artefact reads as a strong result.</text>
+
+  <line x1="800" y1="540" x2="816" y2="540" stroke="#C62828" stroke-width="1.5" stroke-dasharray="4,3"/>
+
+  <!-- ROW 4: pooling -->
+  <line x1="415" y1="660" x2="415" y2="686" stroke="#0E2A45" stroke-width="1.8" marker-end="url(#ar)"/>
+
+  <rect x="30" y="688" width="1120" height="62" rx="9" fill="#E8EEF6" stroke="#0E2A45" stroke-width="1.4" filter="url(#sh)"/>
+  <rect x="42" y="696" width="260" height="21" rx="4" fill="#0E2A45"/>
+  <text x="172" y="711" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">5. Across platforms, by pooling</text>
+  <text x="314" y="711" font-size="9.5" font-style="italic" fill="#0E2A45">core/analysis/pooled_enrichment.py</text>
+  <text x="42" y="733" font-size="9.5" fill="#1565C0">Each platform is its own stratum with its own background. The strata are combined by DerSimonian-Laird random effects on the log odds ratio, with each</text>
+  <text x="42" y="745" font-size="9.5" fill="#1565C0">variance inflated by that stratum's design effect, and Cochran Q, I2 and tau2 reported. Concatenating the corpora into one table would invite Simpson's paradox.</text>
+
+  <line x1="590" y1="750" x2="590" y2="776" stroke="#0E2A45" stroke-width="1.8" marker-end="url(#ar)"/>
+
+  <rect x="30" y="778" width="1120" height="40" rx="9" fill="#F5F7FA" stroke="#8FA4BC" stroke-width="1.2"/>
+  <rect x="42" y="786" width="96" height="21" rx="4" fill="#8FA4BC"/>
+  <text x="90" y="801" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">Export</text>
+  <text x="150" y="801" font-size="9.5" fill="#0E2A45">Every tab writes a CSV and its figure. Export All also runs the analyses that are computed on demand, so nothing on screen is missing from the folder.</text>
+</svg>

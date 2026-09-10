@@ -1,0 +1,22 @@
+services:
+  genevariate:
+    build: .
+    container_name: genevariate-app
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      # No model weights are baked into the image. Point these at an
+      # OpenAI-compatible server running on the host, or leave them unset:
+      # everything except the assistant and the label extractor works
+      # without an endpoint.
+      - GENEVARIATE_LLM_URL=${GENEVARIATE_LLM_URL:-http://host.docker.internal:11434/v1}
+      - GENEVARIATE_AGENT_BACKEND=${GENEVARIATE_AGENT_BACKEND:-ollama}
+      - GENEVARIATE_AGENT_MODEL=${GENEVARIATE_AGENT_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Must contain GEOmetadb.sqlite.gz, unless every platform you load
+      # carries its own series_id column.
+      - ./data:/app/src/genevariate/data
+      - ./results:/app/src/genevariate/results
+      # X11 socket for the GUI, Linux only.
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
