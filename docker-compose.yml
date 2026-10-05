@@ -1,0 +1,28 @@
+services:
+  genevariate:
+    build: .
+    container_name: genevariate-app
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      # No model weights are baked into the image. Point these at an
+      # inference server running on the host, or leave them unset:
+      # everything except the assistant and the label extractor works
+      # without an endpoint.
+      - GENEVARIATE_AGENT_BACKEND=${GENEVARIATE_AGENT_BACKEND:-ollama}
+      - GENEVARIATE_AGENT_MODEL=${GENEVARIATE_AGENT_MODEL:-}
+      # Where the ollama backend and the label extractor look for Ollama.
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      # Backend groq reads GROQ_API_KEY. Any other backend is treated as
+      # OpenAI-compatible and reads the two below.
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GENEVARIATE_AGENT_BASE_URL=${GENEVARIATE_AGENT_BASE_URL:-}
+      - GENEVARIATE_AGENT_API_KEY=${GENEVARIATE_AGENT_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Must contain GEOmetadb.sqlite.gz, unless every platform you load
+      # carries its own series_id column.
+      - ./data:/app/src/genevariate/data
+      - ./results:/app/src/genevariate/results
+      # X11 socket for the GUI, Linux only.
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
